@@ -8,7 +8,7 @@
     <version>1.28-SNAPSHOT</version>
     <name>typescript-generator</name>
     <description>Generates TypeScript declaration file from specified java classes.</description>
-    <url>https://github.com/vojtechhabarta/typescript-generator</url>
+    <url>https://github.com/Yona-Appletree/typescript-generator</url>
 
     <modules>
         <module>typescript-generator-core</module>
@@ -31,24 +31,21 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git@github.com:vojtechhabarta/typescript-generator.git</connection>
-        <developerConnection>scm:git:git@github.com:vojtechhabarta/typescript-generator.git</developerConnection>
-        <url>https://github.com/vojtechhabarta/typescript-generator</url>
-    </scm>
+        <connection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</connection>
+        <developerConnection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</developerConnection>
+        <url>https://github.com/Yona-Appletree/typescript-generator</url>
+      <tag>typescript-generator-1.28-csky.0</tag>
+  </scm>
 
     <distributionManagement>
         <snapshotRepository>
-            <id>ossrh-vojtech@habarta.cz</id>
-            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+            <id>badgr-snapshots</id>
+            <url>https://nexus.badgr.io/repository/badgr-snapshots</url>
         </snapshotRepository>
         <repository>
-            <id>ossrh-vojtech@habarta.cz</id>
-            <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+            <id>badgr-releases</id>
+            <url>https://nexus.badgr.io/repository/badgr-releases</url>
         </repository>
-        <site>
-            <id>github.io</id>
-            <url>http://vojtechhabarta.github.io/typescript-generator</url>
-        </site>
     </distributionManagement>
 
     <properties>
@@ -126,6 +123,18 @@
                         <inherited>false</inherited>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <!-- Included to fix git commit issue, from https://stackoverflow.com/questions/15166781/mvn-releaseprepare-not-committing-changes-to-pom-xml -->
+                <artifactId>maven-release-plugin</artifactId>
+                <version>2.5.3</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.apache.maven.scm</groupId>
+                        <artifactId>maven-scm-provider-gitexe</artifactId>
+                        <version>1.9.5</version>
+                    </dependency>
+                </dependencies>
             </plugin>
             <!--            <plugin>
                 <groupId>org.sonatype.plugins</groupId>
