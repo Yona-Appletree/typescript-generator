@@ -5,7 +5,7 @@
     <parent>
         <groupId>cz.habarta.typescript-generator</groupId>
         <artifactId>typescript-generator</artifactId>
-        <version>1.28-csky.1-SNAPSHOT</version>
+        <version>1.28-csky.1</version>
     </parent>
 
     <artifactId>typescript-generator-core</artifactId>
