@@ -1,27 +1,13 @@
 
 package cz.habarta.typescript.generator.gradle;
 
-import cz.habarta.typescript.generator.ClassMapping;
-import cz.habarta.typescript.generator.DateMapping;
-import cz.habarta.typescript.generator.EnumMapping;
+import cz.habarta.typescript.generator.*;
 import cz.habarta.typescript.generator.Input;
-import cz.habarta.typescript.generator.JaxrsNamespacing;
-import cz.habarta.typescript.generator.JsonLibrary;
-import cz.habarta.typescript.generator.Output;
-import cz.habarta.typescript.generator.Settings;
-import cz.habarta.typescript.generator.StringQuotes;
-import cz.habarta.typescript.generator.TypeScriptFileType;
-import cz.habarta.typescript.generator.TypeScriptGenerator;
-import cz.habarta.typescript.generator.TypeScriptOutputKind;
-import org.gradle.api.DefaultTask;
-import org.gradle.api.Task;
-import org.gradle.api.tasks.TaskAction;
-
-import java.io.File;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import org.gradle.api.*;
+import org.gradle.api.tasks.*;
 
 
 public class GenerateTask extends DefaultTask {
@@ -41,7 +27,8 @@ public class GenerateTask extends DefaultTask {
     public List<String> excludeClassPatterns;
     public List<String> includePropertyAnnotations;
     public JsonLibrary jsonLibrary;
-    public boolean declarePropertiesAsOptional;
+    @Deprecated public boolean declarePropertiesAsOptional;
+    public OptionalProperties optionalProperties;
     public boolean declarePropertiesAsReadOnly;
     public String removeTypeNamePrefix;
     public String removeTypeNameSuffix;
@@ -76,8 +63,9 @@ public class GenerateTask extends DefaultTask {
     public String npmVersion;
     public StringQuotes stringQuotes;
     public boolean displaySerializerWarning = true;
-    public boolean disableJackson2ModuleDiscovery;
-    public boolean useJackson2RequiredForOptional;
+    @Deprecated public boolean disableJackson2ModuleDiscovery;
+    public boolean jackson2ModuleDiscovery;
+    public List<String> jackson2Modules;
     public boolean debug;
 
     @TaskAction
@@ -116,6 +104,7 @@ public class GenerateTask extends DefaultTask {
         settings.setExcludeFilter(excludeClasses, excludeClassPatterns);
         settings.jsonLibrary = jsonLibrary;
         settings.declarePropertiesAsOptional = declarePropertiesAsOptional;
+        settings.optionalProperties = optionalProperties;
         settings.declarePropertiesAsReadOnly = declarePropertiesAsReadOnly;
         settings.removeTypeNamePrefix = removeTypeNamePrefix;
         settings.removeTypeNameSuffix = removeTypeNameSuffix;
@@ -152,7 +141,8 @@ public class GenerateTask extends DefaultTask {
         settings.setStringQuotes(stringQuotes);
         settings.displaySerializerWarning = displaySerializerWarning;
         settings.disableJackson2ModuleDiscovery = disableJackson2ModuleDiscovery;
-        settings.useJackson2RequiredForOptional = useJackson2RequiredForOptional;
+        settings.jackson2ModuleDiscovery = jackson2ModuleDiscovery;
+        settings.loadJackson2Modules(classLoader, jackson2Modules);
         settings.classLoader = classLoader;
         final File output = outputFile != null
                 ? getProject().file(outputFile)
