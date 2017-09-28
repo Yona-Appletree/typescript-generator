@@ -1,10 +1,15 @@
 
 package cz.habarta.typescript.generator;
 
-import cz.habarta.typescript.generator.parser.*;
-import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import cz.habarta.typescript.generator.parser.BeanModel;
+import cz.habarta.typescript.generator.parser.Jackson2Parser;
+import cz.habarta.typescript.generator.parser.Model;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -108,5 +113,4 @@ public class Jackson2ParserTest {
         System.out.println(new ObjectMapper().writeValueAsString(new SubTypeDiscriminatedByName3()));
         System.out.println(new ObjectMapper().writeValueAsString(new SubTypeDiscriminatedByName4()));
     }
-
 }
