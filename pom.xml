@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>cz.habarta.typescript-generator</groupId>
@@ -35,17 +36,17 @@
         <connection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</connection>
         <developerConnection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</developerConnection>
         <url>https://github.com/Yona-Appletree/typescript-generator</url>
-      <tag>typescript-generator-1.28-csky.0</tag>
-  </scm>
+        <tag>typescript-generator-1.28-csky.0</tag>
+    </scm>
 
     <distributionManagement>
         <snapshotRepository>
             <id>badgr-snapshots</id>
-            <url>https://nexus.badgr.io/repository/badgr-snapshots</url>
+            <url>http://nexus.badgr.io/repository/badgr-snapshots</url>
         </snapshotRepository>
         <repository>
             <id>badgr-releases</id>
-            <url>https://nexus.badgr.io/repository/badgr-releases</url>
+            <url>http://nexus.badgr.io/repository/badgr-releases</url>
         </repository>
     </distributionManagement>
 
@@ -232,7 +233,8 @@
                                     <goal>deploy</goal>
                                 </goals>
                                 <configuration>
-                                    <altDeploymentRepository>local::default::file:target/artifacts</altDeploymentRepository>
+                                    <altDeploymentRepository>local::default::file:target/artifacts
+                                    </altDeploymentRepository>
                                 </configuration>
                             </execution>
                         </executions>
