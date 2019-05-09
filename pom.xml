@@ -5,7 +5,7 @@
     <groupId>cz.habarta.typescript-generator</groupId>
     <artifactId>typescript-generator</artifactId>
     <packaging>pom</packaging>
-    <version>2.14-csky.1-SNAPSHOT</version>
+    <version>2.14-csky.1</version>
     <name>typescript-generator</name>
     <description>Generates TypeScript declaration file from specified java classes.</description>
     <url>https://github.com/Yona-Appletree/typescript-generator</url>
@@ -35,7 +35,7 @@
         <connection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</connection>
         <developerConnection>scm:git:git@github.com:Yona-Appletree/typescript-generator.git</developerConnection>
         <url>https://github.com/Yona-Appletree/typescript-generator</url>
-      <tag>typescript-generator-1.28-csky.0</tag>
+      <tag>typescript-generator-2.14-csky.1</tag>
   </scm>
 
     <distributionManagement>
