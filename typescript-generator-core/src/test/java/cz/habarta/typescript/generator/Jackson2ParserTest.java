@@ -1,16 +1,15 @@
 
 package cz.habarta.typescript.generator;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonSubTypes;
-import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import com.fasterxml.jackson.annotation.JsonTypeName;
+import com.fasterxml.jackson.annotation.*;
+import static com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import cz.habarta.typescript.generator.parser.*;
+import java.util.List;
+import java.util.Optional;
 import javax.xml.bind.annotation.XmlElement;
-import cz.habarta.typescript.generator.parser.BeanModel;
-import cz.habarta.typescript.generator.parser.Jackson2Parser;
-import cz.habarta.typescript.generator.parser.Model;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -121,7 +120,7 @@ public class Jackson2ParserTest {
         settings.optionalProperties = OptionalProperties.useLibraryDefinition;
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithOptionals.class));
         Assert.assertTrue(output.contains("oname1?: string"));
-//        Assert.assertTrue(output.contains("oname2?: string"));  // uncomment on Java 8
+        Assert.assertTrue(output.contains("oname2?: string"));
         Assert.assertTrue(output.contains("jname1?: string"));
         Assert.assertTrue(output.contains("jname2?: string"));
         Assert.assertTrue(output.contains("jname3: string"));
@@ -139,7 +138,7 @@ public class Jackson2ParserTest {
         settings.optionalProperties = OptionalProperties.useLibraryDefinition;
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithOptionals.class));
         Assert.assertTrue(output.contains("oname1?: string"));
-//        Assert.assertTrue(output.contains("oname2?: string"));  // uncomment on Java 8
+        Assert.assertTrue(output.contains("oname2?: string"));
         Assert.assertTrue(output.contains("jname1?: string"));
         Assert.assertTrue(output.contains("jname2?: string"));
         Assert.assertTrue(output.contains("jname3?: string"));
@@ -152,7 +151,7 @@ public class Jackson2ParserTest {
 
     public static class ClassWithOptionals {
         public String oname1;
-//        public Optional<String> oname2;  // uncomment on Java 8
+        public Optional<String> oname2;
 
         @JsonProperty
         public String jname1;
@@ -177,6 +176,141 @@ public class Jackson2ParserTest {
         public String getXname4() {
             return xname4;
         }
+    }
+
+    @Test
+    public void testStandardEnumValue() {
+        testEnumByType(TestEnums.StandardEnum.class, "A", "B", "C");
+    }
+
+    @Test
+    public void testStringPropertyEnumValue() {
+        testEnumByType(TestEnums.StringPropertyValuedEnum.class, "_A", "_B", "_C");
+    }
+
+    @Test
+    public void testNumberPropertyEnumValue() {
+        testEnumByType(TestEnums.NumberPropertyValuedEnum.class, 0, 1, 2);
+    }
+
+    @Test
+    public void testJsonNumberFieldValuedEnum() {
+        testEnumByType(TestEnums.NumberFieldValuedEnum.class, 1, 2, 3);
+    }
+
+    @Test
+    public void testJsonNumberMethodValuedEnum() {
+        testEnumByType(TestEnums.NumberMethodValuedEnum.class, 1, 2, 3);
+    }
+
+    @Test
+    public void testMethodEnumValue() {
+        testEnumByType(TestEnums.GeneralMethodValuedEnum.class, "_A", "_B", "_C");
+    }
+
+    @Test
+    public void testToStringEnumValue() {
+        testEnumByType(TestEnums.ToStringValuedEnum.class, "_A", "_B", "_C");
+    }
+
+    @Test
+    public void testJsonPropertyEnumValue() {
+        testEnumByType(TestEnums.JsonPropertyValuedEnum.class, "_A", "_B", "_C");
+    }
+
+    private void testEnumByType(Class<? extends Enum<?>> type, Object... expectedValues) {
+        final Jackson2Parser jacksonParser = getJackson2Parser();
+        final Model model = jacksonParser.parseModel(type);
+        Assert.assertEquals(1, model.getEnums().size());
+        final EnumModel enumModel = model.getEnums().get(0);
+        Assert.assertEquals(expectedValues.length, enumModel.getMembers().size());
+        for (int i = 0; i < expectedValues.length; i++) {
+            Assert.assertEquals(expectedValues[i], enumModel.getMembers().get(i).getEnumValue());
+        }
+    }
+
+    @Test
+    public void testIgnoredProperty() {
+        final Settings settings = TestUtils.settings();
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithIgnoredProperty.class));
+        Assert.assertTrue(output.contains("name1: string"));
+        Assert.assertTrue(!output.contains("name2: string"));
+    }
+
+    private static class ClassWithIgnoredProperty {
+        public String name1;
+        @JsonIgnore
+        public String name2;
+    }
+
+//    public static void main(String[] args) throws JsonProcessingException {
+//        final ObjectMapper objectMapper = new ObjectMapper();
+//        final ClassWithIgnoredProperty instance = new ClassWithIgnoredProperty();
+//        instance.name1 = "xxx";
+//        instance.name2 = "xxx";
+//        System.out.println(objectMapper.writeValueAsString(instance));
+//    }
+
+    @Test
+    public void testVisibilityConfiguration() {
+        {
+            final Settings settings = TestUtils.settings();
+            final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithDifferentMemberVisibilities.class));
+            Assert.assertTrue(!output.contains("property1: string"));
+            Assert.assertTrue(output.contains("property2: string"));
+        }
+        {
+            final Settings settings = TestUtils.settings();
+            settings.jackson2Configuration = new Jackson2ConfigurationResolved();
+            settings.jackson2Configuration.setVisibility(ANY, NONE, NONE, NONE, NONE);
+            final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithDifferentMemberVisibilities.class));
+            Assert.assertTrue(output.contains("property1: string"));
+            Assert.assertTrue(!output.contains("property2: string"));
+        }
+    }
+
+    private static class ClassWithDifferentMemberVisibilities {
+        private String property1;
+        public String getProperty2() {
+            return null;
+        }
+    }
+
+    @Test
+    public void testJsonNode() {
+        final Settings settings = TestUtils.settings();
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithJsonNode.class));
+        Assert.assertTrue(output.contains("node: any"));
+        Assert.assertTrue(output.contains("nodes: any[]"));
+    }
+
+    private static class ClassWithJsonNode {
+        public JsonNode node;
+        public List<JsonNode> nodes;
+    }
+
+    @Test
+    public void testDescriptions() {
+        final Settings settings = TestUtils.settings();
+        settings.mapEnum = EnumMapping.asEnum;
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(ClassWithDescriptions.class, EnumWithDescriptions.class));
+        Assert.assertTrue(output.contains("Class description"));
+        Assert.assertTrue(output.contains("Property description"));
+        Assert.assertTrue(output.contains("second line"));
+        Assert.assertTrue(output.contains("Enum description"));
+        Assert.assertTrue(output.contains("Enum constant description"));
+    }
+
+    @JsonClassDescription("Class description\nsecond line")
+    private static class ClassWithDescriptions {
+        @JsonPropertyDescription("Property description\nsecond line")
+        public String value;
+    }
+
+    @JsonClassDescription("Enum description")
+    private static enum EnumWithDescriptions {
+        @JsonPropertyDescription("Enum constant description")
+        Empty
     }
 
 }

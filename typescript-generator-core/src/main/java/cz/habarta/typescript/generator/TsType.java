@@ -2,6 +2,8 @@
 package cz.habarta.typescript.generator;
 
 import cz.habarta.typescript.generator.compiler.Symbol;
+import cz.habarta.typescript.generator.emitter.Emittable;
+import cz.habarta.typescript.generator.emitter.Emitter;
 import cz.habarta.typescript.generator.util.Utils;
 import java.util.*;
 
@@ -10,7 +12,7 @@ import java.util.*;
  * Represents TypeScript type.
  * That means something which can appear in type position (after ":" character).
  */
-public abstract class TsType {
+public abstract class TsType implements Emittable {
 
     public static final TsType Any = new BasicType("any");
     public static final TsType Boolean = new BasicType("boolean");
@@ -18,6 +20,10 @@ public abstract class TsType {
     public static final TsType String = new BasicType("string");
     public static final TsType Date = new BasicType("Date");
     public static final TsType Void = new BasicType("void");
+    public static final TsType Undefined = new BasicType("undefined");
+    public static final TsType Null = new BasicType("null");
+    public static final TsType Never = new BasicType("never");
+    public static final TsType Unknown = new BasicType("unknown");
 
     @Override
     public boolean equals(Object rhs) {
@@ -33,15 +39,8 @@ public abstract class TsType {
         return new TsType.OptionalType(this);
     }
 
+    @Override
     public abstract String format(Settings settings);
-
-    protected static List<String> format(List<TsType> types, Settings settings) {
-        final List<String> formatted = new ArrayList<>();
-        for (TsType type : types) {
-            formatted.add(type.format(settings));
-        }
-        return formatted;
-    }
 
     @Override
     public String toString() {
@@ -59,6 +58,25 @@ public abstract class TsType {
         @Override
         public String format(Settings settings) {
             return name;
+        }
+    }
+
+    public static class GenericBasicType extends TsType.BasicType {
+
+        public final List<TsType> typeArguments;
+
+        public GenericBasicType(String name, TsType... typeArguments) {
+            this(name, Arrays.asList(typeArguments));
+        }
+
+        public GenericBasicType(String name, List<? extends TsType> typeArguments) {
+            super(name);
+            this.typeArguments = new ArrayList<>(typeArguments);
+        }
+
+        @Override
+        public String format(Settings settings) {
+            return name + "<" + Emitter.formatList(settings, typeArguments) + ">";
         }
     }
 
@@ -102,14 +120,14 @@ public abstract class TsType {
             this(symbol, Arrays.asList(typeArguments));
         }
 
-        public GenericReferenceType(Symbol symbol, List<TsType> typeArguments) {
+        public GenericReferenceType(Symbol symbol, List<? extends TsType> typeArguments) {
             super(symbol);
-            this.typeArguments = typeArguments;
+            this.typeArguments = new ArrayList<>(typeArguments);
         }
 
         @Override
         public String format(Settings settings) {
-            return symbol.getFullName() + "<" + Utils.join(format(typeArguments, settings), ", ") + ">";
+            return symbol.getFullName() + "<" + Emitter.formatList(settings, typeArguments) + ">";
         }
     }
     
@@ -167,15 +185,40 @@ public abstract class TsType {
 
         public final List<TsType> types;
 
+        public UnionType(TsType... types) {
+            this(Arrays.asList(types));
+        }
+
         public UnionType(List<? extends TsType> types) {
-            this.types = new ArrayList<TsType>(new LinkedHashSet<TsType>(types));
+            this.types = new ArrayList<>(new LinkedHashSet<>(types));
         }
 
         @Override
         public String format(Settings settings) {
             return types.isEmpty()
-                    ? "never"
-                    : Utils.join(format(types, settings), " | ");
+                    ? Never.format(settings)
+                    : Emitter.formatList(settings, types, " | ");
+        }
+
+    }
+
+    public static class IntersectionType extends TsType {
+
+        public final List<TsType> types;
+
+        public IntersectionType(TsType... types) {
+            this(Arrays.asList(types));
+        }
+
+        public IntersectionType(List<? extends TsType> types) {
+            this.types = new ArrayList<>(new LinkedHashSet<>(types));
+        }
+
+        @Override
+        public String format(Settings settings) {
+            return types.isEmpty()
+                    ? Unknown.format(settings)
+                    : Emitter.formatList(settings, types, " & ");
         }
 
     }
@@ -219,7 +262,7 @@ public abstract class TsType {
         }
 
         public ObjectType(List<TsProperty> properties) {
-            this.properties = properties;
+            this.properties = new ArrayList<>(properties);
         }
 
         @Override
@@ -237,43 +280,96 @@ public abstract class TsType {
 
     }
 
-    public static TsType transformTsType(TsType tsType, Transformer transformer) {
-        final TsType type = transformer.transform(tsType);
+    public static class FunctionType extends TsType {
+
+        public final List<TsParameter> parameters;
+        public final TsType type;
+
+        public FunctionType(List<TsParameter> parameters, TsType type) {
+            this.parameters = new ArrayList<>(parameters);
+            this.type = type;
+        }
+
+        @Override
+        public String format(Settings settings) {
+            return Emitter.formatParameterList(parameters, false) + " => " + type.format(settings);
+        }
+
+    }
+
+    public static TsType transformTsType(Context context, TsType tsType, Transformer transformer) {
+        final TsType type = transformer.transform(context, tsType);
+        if (type instanceof TsType.GenericBasicType) {
+            final GenericBasicType genericBasicType = (TsType.GenericBasicType) type;
+            final List<TsType> typeArguments = new ArrayList<>();
+            for (TsType typeArgument : genericBasicType.typeArguments) {
+                typeArguments.add(transformTsType(context, typeArgument, transformer));
+            }
+            return new TsType.GenericBasicType(genericBasicType.name, typeArguments);
+        }
         if (type instanceof TsType.GenericReferenceType) {
             final GenericReferenceType genericReferenceType = (TsType.GenericReferenceType) type;
             final List<TsType> typeArguments = new ArrayList<>();
             for (TsType typeArgument : genericReferenceType.typeArguments) {
-                typeArguments.add(transformTsType(typeArgument, transformer));
+                typeArguments.add(transformTsType(context, typeArgument, transformer));
             }
             return new TsType.GenericReferenceType(genericReferenceType.symbol, typeArguments);
         }
         if (type instanceof TsType.OptionalType) {
             final TsType.OptionalType optionalType = (TsType.OptionalType) type;
-            return new TsType.OptionalType(transformTsType(optionalType.type, transformer));
+            return new TsType.OptionalType(transformTsType(context, optionalType.type, transformer));
         }
         if (type instanceof TsType.BasicArrayType) {
             final TsType.BasicArrayType basicArrayType = (TsType.BasicArrayType) type;
-            return new TsType.BasicArrayType(transformTsType(basicArrayType.elementType, transformer));
+            return new TsType.BasicArrayType(transformTsType(context, basicArrayType.elementType, transformer));
         }
         if (type instanceof TsType.IndexedArrayType) {
             final TsType.IndexedArrayType indexedArrayType = (TsType.IndexedArrayType) type;
             return new TsType.IndexedArrayType(
-                    transformTsType(indexedArrayType.indexType, transformer),
-                    transformTsType(indexedArrayType.elementType, transformer));
+                    transformTsType(context, indexedArrayType.indexType, transformer),
+                    transformTsType(context, indexedArrayType.elementType, transformer));
+        }
+        if (type instanceof TsType.UnionType) {
+            final TsType.UnionType unionType = (TsType.UnionType) type;
+            final List<TsType> types = new ArrayList<>();
+            for (TsType constituentType : unionType.types) {
+                types.add(transformTsType(context, constituentType, transformer));
+            }
+            return new TsType.UnionType(types);
+        }
+        if (type instanceof TsType.IntersectionType) {
+            final TsType.IntersectionType intersectionType = (TsType.IntersectionType) type;
+            final List<TsType> types = new ArrayList<>();
+            for (TsType constituent : intersectionType.types) {
+                types.add(transformTsType(context, constituent, transformer));
+            }
+            return new TsType.IntersectionType(types);
         }
         if (type instanceof TsType.ObjectType) {
             final TsType.ObjectType objectType = (TsType.ObjectType) type;
             final List<TsProperty> properties = new ArrayList<>();
             for (TsProperty property : objectType.properties) {
-                properties.add(new TsProperty(property.name, transformTsType(property.tsType, transformer)));
+                properties.add(new TsProperty(property.name, transformTsType(context, property.tsType, transformer)));
             }
             return new TsType.ObjectType(properties);
+        }
+        if (type instanceof TsType.FunctionType) {
+            final TsType.FunctionType functionType = (TsType.FunctionType) type;
+            final List<TsParameter> parameters = new ArrayList<>();
+            for (TsParameter parameter : functionType.parameters) {
+                parameters.add(new TsParameter(parameter.name, transformTsType(context, parameter.tsType, transformer)));
+            }
+            return new TsType.FunctionType(parameters, transformTsType(context, functionType.type, transformer));
         }
         return type;
     }
 
+    public static class Context {
+        // currently not needed
+    }
+
     public static interface Transformer {
-        public TsType transform(TsType tsType);
+        public TsType transform(Context context, TsType tsType);
     }
 
 }

@@ -2,6 +2,7 @@
 package cz.habarta.typescript.generator.compiler;
 
 import cz.habarta.typescript.generator.Settings;
+import cz.habarta.typescript.generator.TypeScriptGenerator;
 import cz.habarta.typescript.generator.util.Pair;
 import cz.habarta.typescript.generator.util.Utils;
 import java.util.*;
@@ -11,6 +12,8 @@ import javax.script.ScriptEngine;
 import javax.script.ScriptEngineFactory;
 import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
+import jdk.nashorn.api.scripting.NashornScriptEngineFactory;
+import jdk.nashorn.api.scripting.ScriptObjectMirror;
 
 
 /**
@@ -81,9 +84,8 @@ public class SymbolTable {
             final Class<?> cls = entry.getKey().getValue1();
             final String suffix = entry.getKey().getValue2();
             final Symbol symbol = entry.getValue();
-            final String suffixString = suffix != null ? suffix : "";
-            final String fullName = getMappedFullName(cls) + suffixString;
-            symbol.setFullName(fullName);
+            setSymbolQualifiedName(symbol, cls, suffix);
+            final String fullName = symbol.getFullName();
             if (!names.containsKey(fullName)) {
                 names.put(fullName, new ArrayList<Class<?>>());
             }
@@ -98,7 +100,7 @@ public class SymbolTable {
             final String name = entry.getKey();
             final List<Class<?>> classes = entry.getValue();
             if (classes.size() > 1) {
-                System.out.println(String.format("Multiple classes are mapped to '%s' name. Conflicting classes: %s", name, classes));
+                TypeScriptGenerator.getLogger().warning(String.format("Multiple classes are mapped to '%s' name. Conflicting classes: %s", name, classes));
                 conflict = true;
             }
         }
@@ -107,7 +109,22 @@ public class SymbolTable {
         }
     }
 
-    public String getMappedFullName(Class<?> cls) {
+    private void setSymbolQualifiedName(Symbol symbol, Class<?> cls, String suffix) {
+        final String module;
+        final String namespacedName;
+        final Pair<String/*module*/, String/*namespacedName*/> fullNameFromDependency = settings.getModuleDependencies().getFullName(cls);
+        if (fullNameFromDependency != null) {
+            module = fullNameFromDependency.getValue1();
+            namespacedName = fullNameFromDependency.getValue2();
+        } else {
+            module = null;
+            namespacedName = getMappedNamespacedName(cls);
+        }
+        final String suffixString = suffix != null ? suffix : "";
+        symbol.setFullName(module, namespacedName + suffixString);
+    }
+
+    public String getMappedNamespacedName(Class<?> cls) {
         if (cls == null) {
             return null;
         }
@@ -176,24 +193,22 @@ public class SymbolTable {
     }
 
     private static boolean isUndefined(Object variable) {
-        // Java 8
-//        return ScriptObjectMirror.isUndefined(variable);
-
-        // Hack for Java 7, it should match both:
-        // org.mozilla.javascript.Undefined (Java 7)
-        // jdk.nashorn.internal.runtime.Undefined (Java 8)
-        return variable != null && variable.getClass().getSimpleName().equals("Undefined");
+        return ScriptObjectMirror.isUndefined(variable);
     }
 
     private CustomTypeNamingFunction getCustomTypeNamingFunction() throws ScriptException {
         if (customTypeNamingFunction == null) {
             final String engineMimeType = "application/javascript";
             final ScriptEngineManager manager = new ScriptEngineManager();
-            final ScriptEngine engine = manager.getEngineByMimeType(engineMimeType);
+
+            // getting ScriptEngine from manager doesn't work in Maven plugin on Java 9
+//            final ScriptEngine engine = manager.getEngineByMimeType(engineMimeType);
+            final ScriptEngine engine = new NashornScriptEngineFactory().getScriptEngine();
+
             if (engine == null) {
-                System.out.println(String.format("Error: Script engine for '%s' MIME type not found. Available engines: %s", engineMimeType, manager.getEngineFactories().size()));
+                TypeScriptGenerator.getLogger().error(String.format("Script engine for '%s' MIME type not found. Available engines: %s", engineMimeType, manager.getEngineFactories().size()));
                 for (ScriptEngineFactory factory : manager.getEngineFactories()) {
-                    System.out.println(String.format("  %s %s - MIME types: %s", factory.getEngineName(), factory.getEngineVersion(), factory.getMimeTypes()));
+                    TypeScriptGenerator.getLogger().info(String.format("  %s %s - MIME types: %s", factory.getEngineName(), factory.getEngineVersion(), factory.getMimeTypes()));
                 }
                 throw new RuntimeException("Cannot evaluate function specified using 'customTypeNamingFunction' parameter. See log for details.");
             }
@@ -206,6 +221,14 @@ public class SymbolTable {
 
     public static interface CustomTypeNamingFunction {
         public Object getName(String className, String classSimpleName);
+    }
+
+    public boolean isImported(Symbol symbol) {
+        final Class<?> cls = getSymbolClass(symbol);
+        if (cls != null) {
+            return settings.getModuleDependencies().getFullName(cls) != null;
+        }
+        return false;
     }
 
     public static class NameConflictException extends RuntimeException {

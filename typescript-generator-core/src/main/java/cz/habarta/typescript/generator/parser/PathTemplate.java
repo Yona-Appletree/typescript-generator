@@ -1,12 +1,14 @@
 
 package cz.habarta.typescript.generator.parser;
 
+import cz.habarta.typescript.generator.compiler.ModelCompiler;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 
+// see org.glassfish.jersey.uri.internal.UriTemplateParser
 public class PathTemplate {
 
     private final List<Part> parts;
@@ -21,7 +23,17 @@ public class PathTemplate {
 
     public static PathTemplate parse(String path) {
         final List<Part> parts = new ArrayList<>();
-        final Matcher matcher = Pattern.compile("\\{\\s*(?<ParamName>\\w[\\w\\.-]*)\\s*(:\\s*(?<ParamRegex>[^{}\\s]+)\\s*)?\\}").matcher(path);
+        final String pattern = ""
+                + "\\{"
+                + "\\s*"
+                + "(?<ParamName>\\w[\\w\\.-]*)"
+                + "\\s*"
+                + "(:"
+                + "\\s*"
+                + "(?<ParamRegex>[^{}\\s]+(\\{[^{}]*\\}[^{}]*)*)"  // this handles RegExp which may contain '{}' quantifiers
+                + "\\s*)?"
+                + "\\}";
+        final Matcher matcher = Pattern.compile(pattern).matcher(path);
         int index = 0;
         while (matcher.find()) {
             if (matcher.start() > index) {
@@ -41,15 +53,15 @@ public class PathTemplate {
         for (Part part : parts) {
             if (part instanceof Literal) {
                 final Literal literal = (Literal) part;
-                sb.append(literal.literal);
+                sb.append(literal.getLiteral());
             }
             if (part instanceof Parameter) {
                 final Parameter parameter = (Parameter) part;
                 sb.append(parameterLeftDelimiter);
-                sb.append(parameter.name);
-                if (includeParameterRegex && parameter.regex != null) {
+                sb.append(parameter.getValidName());
+                if (includeParameterRegex && parameter.getRegex() != null) {
                     sb.append(":");
-                    sb.append(parameter.regex);
+                    sb.append(parameter.getRegex());
                 }
                 sb.append(parameterRightDelimiter);
             }
@@ -81,7 +93,11 @@ public class PathTemplate {
             this.regex = regex;
         }
 
-        public String getName() {
+        public String getValidName() {
+            return ModelCompiler.getValidIdentifierName(name);
+        }
+
+        public String getOriginalName() {
             return name;
         }
 

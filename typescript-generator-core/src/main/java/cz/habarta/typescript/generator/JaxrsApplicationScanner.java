@@ -2,10 +2,10 @@
 package cz.habarta.typescript.generator;
 
 import cz.habarta.typescript.generator.parser.*;
-import cz.habarta.typescript.generator.util.Predicate;
-import io.github.lukehutch.fastclasspathscanner.scanner.ScanResult;
+import io.github.classgraph.ScanResult;
 import java.lang.reflect.*;
 import java.util.*;
+import java.util.function.Predicate;
 import javax.ws.rs.*;
 import javax.ws.rs.core.*;
 
@@ -13,8 +13,10 @@ import javax.ws.rs.core.*;
 public class JaxrsApplicationScanner {
 
     public static List<SourceType<Type>> scanJaxrsApplication(Class<?> jaxrsApplicationClass, Predicate<String> isClassNameExcluded) {
+        final ClassLoader originalContextClassLoader = Thread.currentThread().getContextClassLoader();
         try {
-            System.out.println("Scanning JAX-RS application: " + jaxrsApplicationClass.getName());
+            Thread.currentThread().setContextClassLoader(jaxrsApplicationClass.getClassLoader());
+            TypeScriptGenerator.getLogger().info("Scanning JAX-RS application: " + jaxrsApplicationClass.getName());
             final Constructor<?> constructor = jaxrsApplicationClass.getDeclaredConstructor();
             constructor.setAccessible(true);
             final Application application = (Application) constructor.newInstance();
@@ -27,20 +29,22 @@ public class JaxrsApplicationScanner {
             return new JaxrsApplicationScanner().scanJaxrsApplication(jaxrsApplicationClass, resourceClasses, isClassNameExcluded);
         } catch (ReflectiveOperationException e) {
             throw reportError(e);
+        } finally {
+            Thread.currentThread().setContextClassLoader(originalContextClassLoader);
         }
     }
 
     public static List<SourceType<Type>> scanAutomaticJaxrsApplication(ScanResult scanResult, Predicate<String> isClassNameExcluded) {
-        final List<String> namesOfResourceClasses = scanResult.getNamesOfClassesWithAnnotation(Path.class);
+        final List<String> namesOfResourceClasses = scanResult.getClassesWithAnnotation(Path.class.getName()).getNames();
         final List<Class<?>> resourceClasses = Input.loadClasses(namesOfResourceClasses);
-        System.out.println(String.format("Found %d root resources.", resourceClasses.size()));
+        TypeScriptGenerator.getLogger().info(String.format("Found %d root resources.", resourceClasses.size()));
         return new JaxrsApplicationScanner().scanJaxrsApplication(null, resourceClasses, isClassNameExcluded);
     }
 
     private static RuntimeException reportError(ReflectiveOperationException e) {
         final String url = "https://github.com/vojtechhabarta/typescript-generator/wiki/JAX-RS-Application";
         final String message = "Cannot load JAX-RS application. For more information see " + url + ".";
-        System.out.println(message);
+        TypeScriptGenerator.getLogger().error(message);
         return new RuntimeException(message, e);
     }
 

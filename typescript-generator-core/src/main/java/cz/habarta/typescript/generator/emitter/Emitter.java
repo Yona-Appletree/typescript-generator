@@ -3,6 +3,7 @@ package cz.habarta.typescript.generator.emitter;
 
 import cz.habarta.typescript.generator.*;
 import cz.habarta.typescript.generator.compiler.EnumMemberModel;
+import cz.habarta.typescript.generator.compiler.ModelCompiler;
 import cz.habarta.typescript.generator.util.Utils;
 import java.io.*;
 import java.text.*;
@@ -25,7 +26,7 @@ public class Emitter implements EmitterExtension.Writer {
         this.forceExportKeyword = forceExportKeyword;
         this.indent = initialIndentationLevel;
         if (outputName != null) {
-            System.out.println("Writing declarations to: " + outputName);
+            TypeScriptGenerator.getLogger().info("Writing declarations to: " + outputName);
         }
         emitFileComment();
         emitReferences();
@@ -38,6 +39,12 @@ public class Emitter implements EmitterExtension.Writer {
     }
 
     private void emitFileComment() {
+        if (!settings.noTslintDisable) {
+            writeIndentedLine("/* tslint:disable */");
+        }
+        if (!settings.noEslintDisable) {
+            writeIndentedLine("/* eslint-disable */");
+        }
         if (!settings.noFileComment) {
             final String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
             writeIndentedLine("// Generated using typescript-generator version " + TypeScriptGenerator.Version + " on " + timestamp + ".");
@@ -54,6 +61,12 @@ public class Emitter implements EmitterExtension.Writer {
     }
 
     private void emitImports() {
+        if (settings.moduleDependencies != null && !settings.moduleDependencies.isEmpty()) {
+            writeNewLine();
+            for (ModuleDependency dependency : settings.moduleDependencies) {
+                writeIndentedLine("import * as " + dependency.importAs + " from " + quote(dependency.importFrom, settings) + ";");
+            }
+        }
         if (settings.importDeclarations != null && !settings.importDeclarations.isEmpty()) {
             writeNewLine();
             for (String importDeclaration : settings.importDeclarations) {
@@ -107,10 +120,22 @@ public class Emitter implements EmitterExtension.Writer {
         emitLiteralEnums(model, exportKeyword, declareKeyword);
         emitHelpers(model);
         for (EmitterExtension emitterExtension : settings.extensions) {
-            writeNewLine();
-            writeNewLine();
-            writeIndentedLine(String.format("// Added by '%s' extension", emitterExtension.getClass().getSimpleName()));
-            emitterExtension.emitElements(this, settings, exportKeyword, model);
+            final List<String> extensionLines = new ArrayList<>();
+            final EmitterExtension.Writer extensionWriter = new EmitterExtension.Writer() {
+                @Override
+                public void writeIndentedLine(String line) {
+                    extensionLines.add(line);
+                }
+            };
+            emitterExtension.emitElements(extensionWriter, settings, exportKeyword, model);
+            if (!extensionLines.isEmpty()) {
+                writeNewLine();
+                writeNewLine();
+                writeIndentedLine(String.format("// Added by '%s' extension", emitterExtension.getClass().getSimpleName()));
+                for (String line : extensionLines) {
+                    this.writeIndentedLine(line);
+                }
+            }
         }
     }
 
@@ -186,49 +211,40 @@ public class Emitter implements EmitterExtension.Writer {
     private void emitProperty(TsPropertyModel property) {
         emitComments(property.getComments());
         final TsType tsType = property.getTsType();
-        final String readonly = property.readonly ? "readonly " : "";
+        final String staticString = property.modifiers.isStatic ? "static " : "";
+        final String readonlyString = property.modifiers.isReadonly ? "readonly " : "";
         final String questionMark = tsType instanceof TsType.OptionalType ? "?" : "";
-        writeIndentedLine(readonly + quoteIfNeeded(property.getName(), settings) + questionMark + ": " + tsType.format(settings) + ";");
+        writeIndentedLine(staticString + readonlyString + quoteIfNeeded(property.getName(), settings) + questionMark + ": " + tsType.format(settings) + ";");
     }
 
     public static String quoteIfNeeded(String name, Settings settings) {
-        return isValidIdentifierName(name) ? name : quote(name, settings);
+        return ModelCompiler.isValidIdentifierName(name) ? name : quote(name, settings);
     }
 
     public static String quote(String value, Settings settings) {
         return settings.quotes + value + settings.quotes;
     }
 
-    // https://github.com/Microsoft/TypeScript/blob/master/doc/spec.md#2.2.2
-    // http://www.ecma-international.org/ecma-262/6.0/index.html#sec-names-and-keywords
-    public static boolean isValidIdentifierName(String name) {
-        if (name == null || name.isEmpty()) {
-            return false;
+    public static String formatList(Settings settings, List<? extends Emittable> list) {
+        return formatList(settings, list, ", ");
+    }
+
+    public static String formatList(Settings settings, List<? extends Emittable> list, String delimiter) {
+        final List<String> result = new ArrayList<>();
+        for (Emittable item : list) {
+            result.add(item.format(settings));
         }
-        final char start = name.charAt(0);
-        if (!Character.isUnicodeIdentifierStart(start) && start != '$' && start != '_') {
-            return false;
-        }
-        for (char c : name.substring(1).toCharArray()) {
-            if (!Character.isUnicodeIdentifierPart(c) && c != '$' && c != '_' && c != '\u200C' && c != '\u200D') {
-                return false;
-            }
-        }
-        return true;
+        return Utils.join(result, delimiter);
     }
 
     private void emitCallable(TsCallableModel method) {
         writeNewLine();
         emitComments(method.getComments());
-        final List<String> parameters = new ArrayList<>();
-        for (TsParameterModel parameter : method.getParameters()) {
-            final String access = parameter.getAccessibilityModifier() != null ? parameter.getAccessibilityModifier().format() + " " : "";
-            final String questionMark = (parameter.getTsType() instanceof TsType.OptionalType) ? "?" : "";
-            final String type = parameter.getTsType() != null ? ": " + parameter.getTsType() : "";
-            parameters.add(access + parameter.getName() + questionMark + type);
-        }
+        final String staticString = method.getModifiers().isStatic ? "static " : "";
+        final String typeParametersString = method.getTypeParameters().isEmpty() ? "" : "<" + formatList(settings, method.getTypeParameters()) + ">";
+        final String parametersString = formatParameterList(method.getParameters(), true);
         final String type = method.getReturnType() != null ? ": " + method.getReturnType() : "";
-        final String signature = method.getName() + "(" + Utils.join(parameters, ", ") + ")" + type;
+        final String signature = staticString + method.getName() + typeParametersString + parametersString + type;
         if (method.getBody() != null) {
             writeIndentedLine(signature + " {");
             indent++;
@@ -240,17 +256,92 @@ public class Emitter implements EmitterExtension.Writer {
         }
     }
 
+    public static String formatParameterList(List<? extends TsParameter> parameters, boolean alwaysEncloseInParentheses) {
+        final List<String> params = new ArrayList<>();
+        for (TsParameter parameter : parameters) {
+            final TsAccessibilityModifier accessibilityModifier = parameter instanceof TsParameterModel
+                    ? ((TsParameterModel) parameter).getAccessibilityModifier()
+                    : null;
+            final String access = accessibilityModifier != null ? accessibilityModifier.format() + " " : "";
+            final String questionMark = (parameter.getTsType() instanceof TsType.OptionalType) ? "?" : "";
+            final String type = parameter.getTsType() != null ? ": " + parameter.getTsType() : "";
+            params.add(access + parameter.getName() + questionMark + type);
+        }
+        boolean parentheses = alwaysEncloseInParentheses || (parameters.size() != 1 || parameters.get(0).tsType != null);
+        return parentheses
+                ? "(" + Utils.join(params, ", ") + ")"
+                : Utils.join(params, ", ");
+    }
+
     private void emitStatements(List<TsStatement> statements) {
         for (TsStatement statement : statements) {
             if (statement instanceof TsReturnStatement) {
-                final TsReturnStatement returnStatement = (TsReturnStatement) statement;
-                if (returnStatement.getExpression() != null) {
-                    writeIndentedLine("return " + returnStatement.getExpression().format(settings) + ";");
-                } else {
-                    writeIndentedLine("return;");
-                }
+                emitReturnStatement((TsReturnStatement) statement);
+            } else if (statement instanceof TsIfStatement) {
+                emitIfStatement((TsIfStatement) statement);
+            } else if (statement instanceof TsExpressionStatement) {
+                emitExpressionStatement((TsExpressionStatement) statement);
+            } else if (statement instanceof TsVariableDeclarationStatement) {
+                emitVariableDeclarationStatement((TsVariableDeclarationStatement) statement);
+            } else if (statement instanceof TsSwitchStatement) {
+                emitTsSwitchStatement((TsSwitchStatement) statement);
             }
         }
+    }
+
+    private void emitReturnStatement(TsReturnStatement returnStatement) {
+        if (returnStatement.getExpression() != null) {
+            writeIndentedLine("return " + returnStatement.getExpression().format(settings) + ";");
+        } else {
+            writeIndentedLine("return;");
+        }
+    }
+
+    private void emitIfStatement(TsIfStatement ifStatement) {
+        writeIndentedLine("if (" + ifStatement.getExpression().format(settings) + ") {");
+        indent++;
+        emitStatements(ifStatement.getThenStatements());
+        indent--;
+        if (ifStatement.getElseStatements() != null) {
+            writeIndentedLine("} else {");
+            indent++;
+            emitStatements(ifStatement.getElseStatements());
+            indent--;
+        }
+        writeIndentedLine("}");
+    }
+
+    private void emitExpressionStatement(TsExpressionStatement expressionStatement) {
+        writeIndentedLine(expressionStatement.getExpression().format(settings) + ";");
+    }
+
+    private void emitVariableDeclarationStatement(TsVariableDeclarationStatement variableDeclarationStatement) {
+        writeIndentedLine(
+                (variableDeclarationStatement.isConst() ? "const " : "let ")
+                + variableDeclarationStatement.getName()
+                + (variableDeclarationStatement.getType() != null ? ": " + variableDeclarationStatement.getType().format(settings) : "")
+                + (variableDeclarationStatement.getInitializer() != null ? " = " + variableDeclarationStatement.getInitializer().format(settings) : "")
+                + ";"
+        );
+    }
+
+    private void emitTsSwitchStatement(TsSwitchStatement switchStatement) {
+        writeIndentedLine("switch (" + switchStatement.getExpression().format(settings) + ") {");
+        indent++;
+        for (TsSwitchCaseClause caseClause : switchStatement.getCaseClauses()) {
+            writeIndentedLine("case " + caseClause.getExpression().format(settings) + ":");
+            indent++;
+            emitStatements(caseClause.getStatements());
+            indent--;
+        }
+        if (switchStatement.getDefaultClause() != null) {
+            writeIndentedLine("default:");
+            indent++;
+            emitStatements(switchStatement.getDefaultClause());
+            indent--;
+        }
+        indent--;
+        writeIndentedLine("}");
     }
 
     private void emitTypeAlias(TsAliasModel alias, boolean exportKeyword) {
@@ -266,7 +357,7 @@ public class Emitter implements EmitterExtension.Writer {
         writeNewLine();
         emitComments(enumModel.getComments());
         final String declareText = declareKeyword ? "declare " : "";
-        final String constText = settings.nonConstEnums ? "" : "const ";
+        final String constText = enumModel.isNonConstEnum() ? "" : "const ";
         writeIndentedLine(exportKeyword, declareText + constText + "enum " + enumModel.getName().getSimpleName() + " {");
         indent++;
         for (EnumMemberModel member : enumModel.getMembers()) {

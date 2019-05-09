@@ -2,16 +2,20 @@
 package cz.habarta.typescript.generator;
 
 import com.fasterxml.jackson.core.type.*;
+import cz.habarta.typescript.generator.compiler.ModelCompiler;
 import cz.habarta.typescript.generator.parser.*;
-import cz.habarta.typescript.generator.util.Predicate;
-import io.github.lukehutch.fastclasspathscanner.FastClasspathScanner;
+import io.github.classgraph.ClassGraph;
 import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
 import java.io.*;
 import java.lang.reflect.*;
 import java.net.URI;
 import java.util.*;
+import java.util.function.Predicate;
 import javax.activation.*;
 import javax.ws.rs.*;
+import javax.ws.rs.container.AsyncResponse;
+import javax.ws.rs.container.Suspended;
 import javax.ws.rs.core.*;
 import javax.xml.bind.*;
 import javax.xml.transform.*;
@@ -36,7 +40,8 @@ public class JaxrsApplicationTest {
 
     @Test
     public void testReturnedTypesFromResource() {
-        final JaxrsApplicationParser.Result result = new JaxrsApplicationParser(TestUtils.settings()).tryParse(new SourceType<>(TestResource1.class));
+        JaxrsApplicationParser jaxrsApplicationParser = createJaxrsApplicationParser(TestUtils.settings());
+        final JaxrsApplicationParser.Result result = jaxrsApplicationParser.tryParse(new SourceType<>(TestResource1.class));
         Assert.assertNotNull(result);
         List<Type> types = getTypes(result.discoveredTypes);
         final List<Type> expectedTypes = Arrays.asList(
@@ -50,7 +55,9 @@ public class JaxrsApplicationTest {
                 G.class,
                 new TypeReference<Map<String, H>>(){}.getType(),
                 I.class,
-                J[].class
+                J[].class,
+                // types handled by DefaultTypeProcessor
+                String.class, Boolean.class, Character.class, Number.class, Integer.class, int.class
         );
         assertHasSameItems(expectedTypes, types);
     }
@@ -63,7 +70,7 @@ public class JaxrsApplicationTest {
 
     @Test
     public void testWithParsingWithDefaultApplication() {
-        final List<SourceType<Type>> sourceTypes = JaxrsApplicationScanner.scanAutomaticJaxrsApplication(new FastClasspathScanner().scan(), null);
+        final List<SourceType<Type>> sourceTypes = JaxrsApplicationScanner.scanAutomaticJaxrsApplication(new ClassGraph().enableAllInfo().scan(), null);
         testWithParsing(sourceTypes, false);
     }
 
@@ -110,11 +117,17 @@ public class JaxrsApplicationTest {
                 A.class.getName(),
                 J.class.getName()
         ), null);
-        final JaxrsApplicationParser jaxrsApplicationParser = new JaxrsApplicationParser(settings);
+        final JaxrsApplicationParser jaxrsApplicationParser = createJaxrsApplicationParser(settings);
         final JaxrsApplicationParser.Result result = jaxrsApplicationParser.tryParse(new SourceType<>(TestResource1.class));
         Assert.assertNotNull(result);
         Assert.assertTrue(!getTypes(result.discoveredTypes).contains(A.class));
         Assert.assertTrue(getTypes(result.discoveredTypes).contains(J[].class));
+    }
+
+    private static JaxrsApplicationParser createJaxrsApplicationParser(Settings settings) {
+        final TypeProcessor typeProcessor = new TypeScriptGenerator(settings).getCommonTypeProcessor();
+        final JaxrsApplicationParser jaxrsApplicationParser = new JaxrsApplicationParser(settings, typeProcessor);
+        return jaxrsApplicationParser;
     }
 
     private List<Type> getTypes(final List<? extends SourceType<? extends Type>> sourceTypes) {
@@ -195,10 +208,18 @@ public class JaxrsApplicationTest {
                 @QueryParam("") String queryParam,
                 @PathParam("") String pathParam,
                 @CookieParam("") String cookieParam,
+                @Suspended AsyncResponse suspendedParam,
                 @HeaderParam("") String headerParam,
                 @Context String context,
                 @FormParam("") String formParam,
                 I entityI) {
+        }
+    
+        @POST
+        @ApiOperation(value = "async", response = String.class)
+        public void setAsync(
+                @Suspended AsyncResponse suspendedParam
+        ) {
         }
         @POST
         public void setJs(J[] js) {
@@ -265,6 +286,7 @@ public class JaxrsApplicationTest {
         Assert.assertTrue(errorMessage, output.contains("getA(): RestResponse<A>;"));
         Assert.assertTrue(errorMessage, output.contains("type RestResponse<R> = Promise<R>;"));
         Assert.assertTrue(errorMessage, !output.contains("function uriEncoding"));
+        Assert.assertTrue(errorMessage, output.contains("setAsync(): RestResponse<string>"));
     }
 
     @Test
@@ -280,7 +302,7 @@ public class JaxrsApplicationTest {
         Assert.assertTrue(errorMessage, output.contains("getOrganization(organizationCode: string, organizationId: number): RestResponse<Organization>;"));
         Assert.assertTrue(errorMessage, output.contains("searchOrganizations(queryParams?: { name?: string; \"search-limit\"?: number; }): RestResponse<Organization[]>;"));
         Assert.assertTrue(errorMessage, output.replace("arg1", "organization").contains("setOrganization(organizationCode: string, organizationId: number, organization: Organization): RestResponse<void>;"));
-        Assert.assertTrue(errorMessage, output.contains("HTTP GET /api/people/{personId}/address/{addressId}"));
+        Assert.assertTrue(errorMessage, output.contains("HTTP GET /api/people/{personId}/address/{address-id}"));
         Assert.assertTrue(errorMessage, output.contains("getAddress(personId: number, addressId: number): RestResponse<Address>;"));
         Assert.assertTrue(errorMessage, output.contains("HTTP GET /api/people/{personId}"));
         Assert.assertTrue(errorMessage, output.contains("getPerson(personId: number): RestResponse<Person>;"));
@@ -320,11 +342,13 @@ public class JaxrsApplicationTest {
         final String errorMessage = "Unexpected output: " + output;
         // HttpClient
         Assert.assertTrue(errorMessage, output.contains("interface HttpClient"));
-        Assert.assertTrue(errorMessage, output.contains("request(requestConfig: { method: string; url: string; queryParams?: any; data?: any; }): RestResponse<any>;"));
+        Assert.assertTrue(errorMessage, output.contains("request<R>(requestConfig: { method: string; url: string; queryParams?: any; data?: any; copyFn?: (data: R) => R; }): RestResponse<R>;"));
         // application client
         Assert.assertTrue(errorMessage, output.contains("class OrganizationApplicationClient"));
         Assert.assertTrue(errorMessage, output.contains("getPerson(personId: number): RestResponse<Person>"));
         Assert.assertTrue(errorMessage, output.contains("return this.httpClient.request({ method: \"GET\", url: uriEncoding`api/people/${personId}` });"));
+        Assert.assertTrue(errorMessage, output.contains("getAddress(personId: number, addressId: number): RestResponse<Address>"));
+        Assert.assertTrue(errorMessage, output.contains("return this.httpClient.request({ method: \"GET\", url: uriEncoding`api/people/${personId}/address/${addressId}` });"));
         Assert.assertTrue(errorMessage, output.contains("type RestResponse<R> = Promise<R>;"));
         // helper
         Assert.assertTrue(errorMessage, output.contains("function uriEncoding"));
@@ -340,7 +364,7 @@ public class JaxrsApplicationTest {
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(OrganizationApplication.class));
         final String errorMessage = "Unexpected output: " + output;
         // HttpClient
-        Assert.assertTrue(errorMessage, output.contains("request(requestConfig: { method: string; url: string; queryParams?: any; data?: any; options?: AxiosRequestConfig; }): RestResponse<any>;"));
+        Assert.assertTrue(errorMessage, output.contains("request<R>(requestConfig: { method: string; url: string; queryParams?: any; data?: any; copyFn?: (data: R) => R; options?: AxiosRequestConfig; }): RestResponse<R>;"));
         // application client
         Assert.assertTrue(errorMessage, output.contains("class OrganizationApplicationClient"));
         Assert.assertTrue(errorMessage, output.contains("getPerson(personId: number, options?: AxiosRequestConfig): RestResponse<Person>"));
@@ -354,7 +378,7 @@ public class JaxrsApplicationTest {
         settings.outputFileType = TypeScriptFileType.implementationFile;
         settings.generateJaxrsApplicationInterface = true;
         settings.generateJaxrsApplicationClient = true;
-        settings.jaxrsNamespacing = JaxrsNamespacing.perResource;
+        settings.jaxrsNamespacing = RestNamespacing.perResource;
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(OrganizationApplication.class));
         final String errorMessage = "Unexpected output: " + output;
         Assert.assertTrue(errorMessage, !output.contains("class OrganizationApplicationClient"));
@@ -369,7 +393,7 @@ public class JaxrsApplicationTest {
         settings.outputFileType = TypeScriptFileType.implementationFile;
         settings.generateJaxrsApplicationInterface = true;
         settings.generateJaxrsApplicationClient = true;
-        settings.jaxrsNamespacing = JaxrsNamespacing.byAnnotation;
+        settings.jaxrsNamespacing = RestNamespacing.byAnnotation;
         settings.jaxrsNamespacingAnnotation = Api.class;
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(OrganizationApplication.class));
         final String errorMessage = "Unexpected output: " + output;
@@ -429,8 +453,8 @@ public class JaxrsApplicationTest {
             return null;
         }
         @GET
-        @Path("address/{addressId}")
-        public Address getAddress(@PathParam("addressId") long addressId) {
+        @Path("address/{address-id}")
+        public Address getAddress(@PathParam("address-id") long addressId) {
             return null;
         }
     }
@@ -465,14 +489,112 @@ public class JaxrsApplicationTest {
             return new Person("B");
         }
         @GET
-        @Path("{personId:.+}")
-        public Person person(@PathParam("personId") long personId) {
+        @Path("{person-id:.+}")
+        public Person person(@PathParam("person-id") long personId) {
             return new Person("C");
         }
     }
 
+    @Test
+    public void testGettingValidIdentifierName() {
+        Assert.assertEquals("foo", ModelCompiler.getValidIdentifierName("foo"));
+        Assert.assertEquals("personId", ModelCompiler.getValidIdentifierName("person-id"));
+        Assert.assertEquals("veryLongParameterName", ModelCompiler.getValidIdentifierName("very-long-parameter-name"));
+        Assert.assertEquals("$nameWithDollar", ModelCompiler.getValidIdentifierName("$nameWithDollar"));
+        Assert.assertEquals("NameWithManyDashes", ModelCompiler.getValidIdentifierName("-name--with-many---dashes-"));
+        Assert.assertEquals("a2b3c4", ModelCompiler.getValidIdentifierName("1a2b3c4"));
+        Assert.assertEquals("a2b3c4", ModelCompiler.getValidIdentifierName("111a2b3c4"));
+    }
+
+    @Test
+    public void testEnumQueryParam() {
+        final Settings settings = TestUtils.settings();
+        settings.generateJaxrsApplicationInterface = true;
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(EnumQueryParamResource.class));
+        Assert.assertTrue(output.contains("queryParams?: { target?: TargetEnum; }"));
+        Assert.assertTrue(output.contains("type TargetEnum = \"Target1\" | \"Target2\""));
+    }
+
+    @Path("enum-query-param")
+    public static class EnumQueryParamResource {
+        @GET
+        @Path("somePath")
+        public List<String> getFoo(@QueryParam("target") TargetEnum target) {
+            return Collections.emptyList();
+        }
+    }
+
+    public enum TargetEnum {
+        Target1, Target2
+    }
+
+    @Test
+    public void testBeanParam() {
+        final Settings settings = TestUtils.settings();
+        settings.generateJaxrsApplicationInterface = true;
+        settings.generateJaxrsApplicationClient = true;
+        settings.outputFileType = TypeScriptFileType.implementationFile;
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(BeanParamResource.class));
+        Assert.assertTrue(output.contains("interface SearchParams1QueryParams"));
+        Assert.assertTrue(output.contains("interface SearchParams2QueryParams"));
+        Assert.assertTrue(output.contains("queryParams?: SearchParams1QueryParams & SearchParams2QueryParams & { message?: string; }"));
+    }
+
+    public static class SearchParams1 {
+        @QueryParam("id")
+        private Integer id;
+
+        @QueryParam("name")
+        private String name;
+    }
+
+    public static class SearchParams2 {
+        private String description;
+        @QueryParam("description")
+        public void setDescription(String description) {
+            this.description = description;
+        }
+    }
+
+//    http://localhost:9998/bean-param?id=1&name=vh&description=desc&message=hello
+
+    @Path("bean-param")
+    @Produces(MediaType.APPLICATION_JSON)
+    public static class BeanParamResource {
+
+        @GET
+        public List<String> getItems(
+                @BeanParam SearchParams1 params1,
+                @BeanParam SearchParams2 params2,
+                @QueryParam("message") String message
+        ) {
+            return Collections.emptyList();
+        }
+    }
+
+    @Test
+    public void testRegExpInPath() {
+        final Settings settings = TestUtils.settings();
+        settings.generateJaxrsApplicationClient = true;
+        settings.outputFileType = TypeScriptFileType.implementationFile;
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(RegExpResource.class));
+        System.out.println(output);
+        Assert.assertTrue(output.contains("getWithId(id: number)"));
+        Assert.assertTrue(output.contains("url: uriEncoding`objects/${id}`"));
+    }
+
+    @Path("objects")
+    public static class RegExpResource {
+        @GET
+        @Path("{id: [0-9]{1,99}}")
+//        @Path("{id: [0-9]+}")
+        public String getWithId(@PathParam("id") long id) {
+            return null;
+        }
+    }
+
     public static void main(String[] args) {
-        final ResourceConfig config = new ResourceConfig(NameConflictResource.class);
+        final ResourceConfig config = new ResourceConfig(BeanParamResource.class);
         JdkHttpServerFactory.createHttpServer(URI.create("http://localhost:9998/"), config);
         System.out.println("Jersey started.");
     }

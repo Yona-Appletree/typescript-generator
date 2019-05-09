@@ -2,9 +2,11 @@
 package cz.habarta.typescript.generator.parser;
 
 import cz.habarta.typescript.generator.util.Utils;
+
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
+import java.lang.reflect.Type;
 import java.util.*;
 
 
@@ -74,7 +76,7 @@ public class Swagger {
             final BeanModel dBean = enrichBean(bean);
             dBeans.add(dBean);
         }
-        return new Model(dBeans, model.getEnums(), model.getJaxrsApplication());
+        return new Model(dBeans, model.getEnums(), model.getRestApplications());
     }
 
     private static BeanModel enrichBean(BeanModel bean) {
@@ -93,7 +95,18 @@ public class Swagger {
             final AnnotatedElement annotatedElement = (AnnotatedElement) property.getOriginalMember();
             final String comment = Utils.getAnnotationElementValue(annotatedElement, "io.swagger.annotations.ApiModelProperty", "value", String.class);
             final List<String> comments = comment != null && !comment.isEmpty() ? Arrays.asList(comment) : null;
-            return property.withComments(Utils.concat(comments, property.getComments()));
+            final PropertyModel propertyModel = property.withComments(Utils.concat(comments, property.getComments()));
+            final String dataTypeString = Utils.getAnnotationElementValue(annotatedElement, "io.swagger.annotations.ApiModelProperty", "dataType", String.class);
+            if (dataTypeString == null || dataTypeString.isEmpty()) {
+                return propertyModel;
+            }
+            try {
+                final Type type = Class.forName(dataTypeString);
+                final boolean required = Utils.getAnnotationElementValue(annotatedElement, "io.swagger.annotations.ApiModelProperty", "required", Boolean.class);
+                return propertyModel.withType(type).withOptional(!required);
+            } catch (ClassNotFoundException | ClassCastException e) {
+                return propertyModel;
+            }
         } else {
             return property;
         }

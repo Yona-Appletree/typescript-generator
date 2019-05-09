@@ -1,30 +1,44 @@
 
 package cz.habarta.typescript.generator.parser;
 
-import cz.habarta.typescript.generator.compiler.EnumMemberModel;
-import cz.habarta.typescript.generator.compiler.EnumKind;
-import cz.habarta.typescript.generator.compiler.SymbolTable;
 import cz.habarta.typescript.generator.*;
+import cz.habarta.typescript.generator.compiler.EnumKind;
+import cz.habarta.typescript.generator.compiler.EnumMemberModel;
+import cz.habarta.typescript.generator.util.Utils;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 
 public abstract class ModelParser {
 
     protected final Settings settings;
-    protected final TypeProcessor typeProcessor;
     private final Javadoc javadoc;
-    private final Queue<SourceType<? extends Type>> typeQueue = new LinkedList<>();
+    private final Queue<SourceType<? extends Type>> typeQueue;
+    private final TypeProcessor commonTypeProcessor;
+    private final List<RestApplicationParser> restApplicationParsers;
+        
+    public static abstract class Factory {
 
-    public ModelParser(Settings settings, TypeProcessor typeProcessor) {
+        public TypeProcessor getSpecificTypeProcessor() {
+            return null;
+        }
+
+        public abstract ModelParser create(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers);
+
+    }
+
+    public ModelParser(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers) {
         this.settings = settings;
-        this.typeProcessor = typeProcessor;
-        this.javadoc = new Javadoc(settings.javadocXmlFiles);
+        this.javadoc = new Javadoc(settings);
+        this.typeQueue = new LinkedList<>();
+        this.restApplicationParsers = restApplicationParsers;
+        this.commonTypeProcessor = commonTypeProcessor;
     }
 
     public Model parseModel(Type type) {
@@ -33,14 +47,15 @@ public abstract class ModelParser {
 
     public Model parseModel(List<SourceType<Type>> types) {
         typeQueue.addAll(types);
-        final Model model = parseQueue();
-        final Model modelWithSwaggerDoc = Swagger.enrichModel(model);
-        final Model modelWithJavadoc = javadoc.enrichModel(modelWithSwaggerDoc);
-        return modelWithJavadoc;
+        Model model = parseQueue();
+        if (!settings.ignoreSwaggerAnnotations) {
+            model = Swagger.enrichModel(model);
+        }
+        model = javadoc.enrichModel(model);
+        return model;
     }
 
     private Model parseQueue() {
-        final JaxrsApplicationParser jaxrsApplicationParser = new JaxrsApplicationParser(settings);
         final Collection<Type> parsedTypes = new ArrayList<>();  // do not use hashcodes, we can only count on `equals` since we use custom `ParameterizedType`s
         final List<BeanModel> beans = new ArrayList<>();
         final List<EnumModel> enums = new ArrayList<>();
@@ -51,18 +66,24 @@ public abstract class ModelParser {
             }
             parsedTypes.add(sourceType.type);
 
-            // JAX-RS resource
-            final JaxrsApplicationParser.Result jaxrsResult = jaxrsApplicationParser.tryParse(sourceType);
-            if (jaxrsResult != null) {
-                typeQueue.addAll(jaxrsResult.discoveredTypes);
+            // REST resource
+            boolean parsedByRestApplicationParser = false;
+            for (RestApplicationParser restApplicationParser : restApplicationParsers) {
+                final JaxrsApplicationParser.Result jaxrsResult = restApplicationParser.tryParse(sourceType);
+                if (jaxrsResult != null) {
+                    typeQueue.addAll(jaxrsResult.discoveredTypes);
+                    parsedByRestApplicationParser = true;
+                }
+            }
+            if (parsedByRestApplicationParser) {
                 continue;
             }
 
-            final TypeProcessor.Result result = processType(sourceType.type);
+            final TypeProcessor.Result result = commonTypeProcessor.processTypeInTemporaryContext(sourceType.type, null, settings);
             if (result != null) {
                 if (sourceType.type instanceof Class<?> && result.getTsType() instanceof TsType.ReferenceType) {
                     final Class<?> cls = (Class<?>) sourceType.type;
-                    System.out.println("Parsing '" + cls.getName() + "'" +
+                    TypeScriptGenerator.getLogger().verbose("Parsing '" + cls.getName() + "'" +
                             (sourceType.usedInClass != null ? " used in '" + sourceType.usedInClass.getSimpleName() + "." + sourceType.usedInMember + "'" : ""));
                     final DeclarationModel model = parseClass(sourceType.asSourceClass());
                     if (model instanceof EnumModel) {
@@ -78,7 +99,10 @@ public abstract class ModelParser {
                 }
             }
         }
-        return new Model(beans, enums, jaxrsApplicationParser.getModel());
+        final List<RestApplicationModel> restModels = restApplicationParsers.stream()
+                .map(RestApplicationParser::getModel)
+                .collect(Collectors.toList());
+        return new Model(beans, enums, restModels);
     }
 
     protected abstract DeclarationModel parseClass(SourceType<Class<?>> sourceClass);
@@ -93,16 +117,27 @@ public abstract class ModelParser {
         }
     }
 
-    protected boolean isAnnotatedPropertyOptional(AnnotatedElement annotatedProperty) {
+    protected boolean isAnnotatedPropertyIncluded(Function<Class<? extends Annotation>, Annotation> getAnnotationFunction, String propertyDescription) {
+        boolean isIncluded = settings.includePropertyAnnotations.isEmpty()
+                || Utils.hasAnyAnnotation(getAnnotationFunction, settings.includePropertyAnnotations);
+        if (!isIncluded) {
+            TypeScriptGenerator.getLogger().verbose("Skipping '" + propertyDescription + "' because it doesn't have any annotation from 'includePropertyAnnotations'");
+            return false;
+        }
+        boolean isExcluded = Utils.hasAnyAnnotation(getAnnotationFunction, settings.excludePropertyAnnotations);
+        if (isExcluded) {
+            TypeScriptGenerator.getLogger().verbose("Skipping '" + propertyDescription + "' because it has some annotation from 'excludePropertyAnnotations'");
+            return false;
+        }
+        return true;
+    }
+
+    protected boolean isAnnotatedPropertyOptional(Function<Class<? extends Annotation>, Annotation> getAnnotationFunction) {
         if (settings.optionalProperties == OptionalProperties.all) {
             return true;
         }
         if (settings.optionalProperties == null || settings.optionalProperties == OptionalProperties.useSpecifiedAnnotations) {
-            for (Class<? extends Annotation> optionalAnnotation : settings.optionalAnnotations) {
-                if (annotatedProperty.getAnnotation(optionalAnnotation) != null) {
-                    return true;
-                }
-            }
+            return Utils.hasAnyAnnotation(getAnnotationFunction, settings.optionalAnnotations);
         }
         return false;
     }
@@ -123,21 +158,12 @@ public abstract class ModelParser {
         typeQueue.add(sourceType);
     }
 
-    protected PropertyModel processTypeAndCreateProperty(String name, Type type, boolean optional, Class<?> usedInClass, Member originalMember, PropertyModel.PullProperties pullProperties) {
-        List<Class<?>> classes = discoverClassesUsedInType(type);
+    protected PropertyModel processTypeAndCreateProperty(String name, Type type, Object typeContext, boolean optional, Class<?> usedInClass, Member originalMember, PropertyModel.PullProperties pullProperties, List<String> comments) {
+        final List<Class<?>> classes = commonTypeProcessor.discoverClassesUsedInType(type, typeContext, settings);
         for (Class<?> cls : classes) {
             typeQueue.add(new SourceType<>(cls, usedInClass, name));
         }
-        return new PropertyModel(name, type, optional, originalMember, pullProperties, null);
-    }
-
-    private List<Class<?>> discoverClassesUsedInType(Type type) {
-        final TypeProcessor.Result result = processType(type);
-        return result != null ? result.getDiscoveredClasses() : Collections.<Class<?>>emptyList();
-    }
-
-    private TypeProcessor.Result processType(Type type) {
-        return typeProcessor.processType(type, new TypeProcessor.Context(new SymbolTable(settings), typeProcessor));
+        return new PropertyModel(name, type, optional, originalMember, pullProperties, typeContext, comments);
     }
 
     public static boolean containsProperty(List<PropertyModel> properties, String propertyName) {

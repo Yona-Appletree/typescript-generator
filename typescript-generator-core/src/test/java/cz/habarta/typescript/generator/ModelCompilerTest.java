@@ -6,15 +6,11 @@ import cz.habarta.typescript.generator.compiler.ModelCompiler;
 import cz.habarta.typescript.generator.emitter.TsModel;
 import cz.habarta.typescript.generator.parser.Jackson2Parser;
 import cz.habarta.typescript.generator.parser.Model;
+import java.lang.reflect.*;
+import java.util.*;
 import org.hamcrest.CoreMatchers;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.*;
 
-import java.lang.reflect.Type;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
 
 public class ModelCompilerTest {
 
@@ -58,8 +54,8 @@ public class ModelCompilerTest {
         final TsModel result = modelCompiler.javaToTypeScript(model);
 
         Assert.assertThat(
-          result.getBean(WithoutTypeParam.class).getProperties().get(0).tsType,
-          CoreMatchers.instanceOf(TsType.UnionType.class)
+                result.getBean(WithoutTypeParam.class).getProperties().get(0).tsType,
+                CoreMatchers.instanceOf(TsType.UnionType.class)
         );
     }
 
@@ -74,8 +70,8 @@ public class ModelCompilerTest {
         final TsModel result = modelCompiler.javaToTypeScript(model);
 
         Assert.assertThat(
-          result.getBean(WithTypeParam.class).getProperties().get(0).tsType,
-          CoreMatchers.instanceOf(TsType.UnionType.class)
+                result.getBean(WithTypeParam.class).getProperties().get(0).tsType,
+                CoreMatchers.instanceOf(TsType.UnionType.class)
         );
     }
 

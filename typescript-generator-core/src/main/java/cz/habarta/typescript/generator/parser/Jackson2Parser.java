@@ -1,50 +1,110 @@
 
 package cz.habarta.typescript.generator.parser;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonClassDescription;
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIdentityInfo;
+import com.fasterxml.jackson.annotation.JsonIdentityReference;
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-import com.fasterxml.jackson.annotation.JsonValue;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.ser.*;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.AnnotationIntrospector;
+import com.fasterxml.jackson.databind.BeanDescription;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.Module;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.cfg.MutableConfigOverride;
+import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.BeanSerializer;
+import com.fasterxml.jackson.databind.ser.BeanSerializerFactory;
+import com.fasterxml.jackson.databind.ser.DefaultSerializerProvider;
 import com.fasterxml.jackson.module.jaxb.JaxbAnnotationIntrospector;
-import cz.habarta.typescript.generator.*;
+import cz.habarta.typescript.generator.ExcludingTypeProcessor;
+import cz.habarta.typescript.generator.Jackson2ConfigurationResolved;
+import cz.habarta.typescript.generator.OptionalProperties;
+import cz.habarta.typescript.generator.Settings;
+import cz.habarta.typescript.generator.TypeProcessor;
+import cz.habarta.typescript.generator.TypeScriptGenerator;
 import cz.habarta.typescript.generator.compiler.EnumKind;
 import cz.habarta.typescript.generator.compiler.EnumMemberModel;
-import cz.habarta.typescript.generator.util.Predicate;
-import java.beans.BeanInfo;
-import java.beans.Introspector;
-import java.beans.PropertyDescriptor;
+import cz.habarta.typescript.generator.util.UnionType;
+import cz.habarta.typescript.generator.util.Utils;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.AccessibleObject;
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 
 public class Jackson2Parser extends ModelParser {
 
+    public static class Jackson2ParserFactory extends ModelParser.Factory {
+
+        private final boolean useJaxbAnnotations;
+
+        public Jackson2ParserFactory() {
+            this(false);
+        }
+
+        private Jackson2ParserFactory(boolean useJaxbAnnotations) {
+            this.useJaxbAnnotations = useJaxbAnnotations;
+        }
+
+        @Override
+        public TypeProcessor getSpecificTypeProcessor() {
+            return createSpecificTypeProcessor();
+        }
+
+        @Override
+        public Jackson2Parser create(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers) {
+            return new Jackson2Parser(settings, commonTypeProcessor, restApplicationParsers, useJaxbAnnotations);
+        }
+
+    }
+
+    public static class JaxbParserFactory extends Jackson2ParserFactory {
+        
+        public JaxbParserFactory() {
+            super(true);
+        }
+        
+    }
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public Jackson2Parser(Settings settings, TypeProcessor typeProcessor) {
-        this(settings, typeProcessor, false);
+        this(settings, typeProcessor, Collections.emptyList(), false);
     }
 
-    public Jackson2Parser(Settings settings, TypeProcessor typeProcessor, boolean useJaxbAnnotations) {
-        super(settings, typeProcessor);
+    public Jackson2Parser(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers, boolean useJaxbAnnotations) {
+        super(settings, commonTypeProcessor, restApplicationParsers);
         if (settings.jackson2ModuleDiscovery) {
             objectMapper.registerModules(ObjectMapper.findModules(settings.classLoader));
         }
         for (Class<? extends Module> moduleClass : settings.jackson2Modules) {
             try {
-                objectMapper.registerModule(moduleClass.newInstance());
+                objectMapper.registerModule(moduleClass.getConstructor().newInstance());
             } catch (ReflectiveOperationException e) {
                 throw new RuntimeException(String.format("Cannot instantiate Jackson2 module '%s'", moduleClass.getName()), e);
             }
@@ -53,60 +113,119 @@ public class Jackson2Parser extends ModelParser {
             AnnotationIntrospector introspector = new JaxbAnnotationIntrospector(objectMapper.getTypeFactory());
             objectMapper.setAnnotationIntrospector(introspector);
         }
+        final Jackson2ConfigurationResolved config = settings.jackson2Configuration;
+        if (config != null) {
+            setVisibility(PropertyAccessor.FIELD, config.fieldVisibility);
+            setVisibility(PropertyAccessor.GETTER, config.getterVisibility);
+            setVisibility(PropertyAccessor.IS_GETTER, config.isGetterVisibility);
+            setVisibility(PropertyAccessor.SETTER, config.setterVisibility);
+            setVisibility(PropertyAccessor.CREATOR, config.creatorVisibility);
+            if (config.shapeConfigOverrides != null) {
+                config.shapeConfigOverrides.entrySet()
+                        .forEach(entry -> setShapeOverride(entry.getKey(), entry.getValue()));
+            }
+            if (config.enumsUsingToString) {
+                objectMapper.enable(SerializationFeature.WRITE_ENUMS_USING_TO_STRING);
+                objectMapper.enable(DeserializationFeature.READ_ENUMS_USING_TO_STRING);
+            }
+        }
+    }
+
+    private void setVisibility(PropertyAccessor accessor, JsonAutoDetect.Visibility visibility) {
+        if (visibility != null) {
+            objectMapper.setVisibility(accessor, visibility);
+        }
+    }
+
+    private void setShapeOverride(Class<?> cls, JsonFormat.Shape shape) {
+        final MutableConfigOverride configOverride = objectMapper.configOverride(cls);
+        configOverride.setFormat(
+                JsonFormat.Value.merge(
+                        configOverride.getFormat(),
+                        JsonFormat.Value.forShape(shape)));
+    }
+
+    private static TypeProcessor createSpecificTypeProcessor() {
+        return new TypeProcessor.Chain(
+                new ExcludingTypeProcessor(Arrays.asList(JsonNode.class.getName())),
+                new TypeProcessor() {
+                    @Override
+                    public TypeProcessor.Result processType(Type javaType, TypeProcessor.Context context) {
+                        if (context.getTypeContext() instanceof Jackson2TypeContext) {
+                            final Jackson2TypeContext jackson2TypeContext = (Jackson2TypeContext) context.getTypeContext();
+                            final Type resultType = jackson2TypeContext.parser.processIdentity(javaType, jackson2TypeContext.beanPropertyWriter);
+                            if (resultType != null) {
+                                return context.withTypeContext(null).processType(resultType);
+                            }
+                        }
+                        return null;
+                    }
+                }
+        );
+    }
+
+    private static class Jackson2TypeContext {
+        public final Jackson2Parser parser;
+        public final BeanPropertyWriter beanPropertyWriter;
+
+        public Jackson2TypeContext(Jackson2Parser parser, BeanPropertyWriter beanPropertyWriter) {
+            this.parser = parser;
+            this.beanPropertyWriter = beanPropertyWriter;
+        }
     }
 
     @Override
     protected DeclarationModel parseClass(SourceType<Class<?>> sourceClass) {
+        final List<String> classComments = getComments(sourceClass.type.getAnnotation(JsonClassDescription.class));
         if (sourceClass.type.isEnum()) {
-            return parseEnumOrObjectEnum(sourceClass);
+            return parseEnumOrObjectEnum(sourceClass, classComments);
         } else {
-            return parseBean(sourceClass);
+            return parseBean(sourceClass, classComments);
         }
     }
 
-    private BeanModel parseBean(SourceType<Class<?>> sourceClass) {
+    private BeanModel parseBean(SourceType<Class<?>> sourceClass, List<String> classComments) {
         final List<PropertyModel> properties = new ArrayList<>();
 
         final BeanHelper beanHelper = getBeanHelper(sourceClass.type);
         if (beanHelper != null) {
-            for (BeanPropertyWriter beanPropertyWriter : beanHelper.getProperties()) {
+            for (final BeanPropertyWriter beanPropertyWriter : beanHelper.getProperties()) {
                 final Member propertyMember = beanPropertyWriter.getMember().getMember();
                 checkMember(propertyMember, beanPropertyWriter.getName(), sourceClass.type);
                 Type propertyType = getGenericType(propertyMember);
-                if (propertyType == JsonNode.class) {
-                    propertyType = Object.class;
+                final List<String> propertyComments = getComments(beanPropertyWriter.getAnnotation(JsonPropertyDescription.class));
+
+                // Map.Entry
+                final Class<?> propertyRawClass = Utils.getRawClassOrNull(propertyType);
+                if (propertyRawClass != null && Map.Entry.class.isAssignableFrom(propertyRawClass)) {
+                    final BeanDescription propertyDescription = objectMapper.getSerializationConfig().introspect(beanPropertyWriter.getType());
+                    final JsonFormat.Value formatOverride = objectMapper.getSerializationConfig().getDefaultPropertyFormat(Map.Entry.class);
+                    final JsonFormat.Value formatFromAnnotation = propertyDescription.findExpectedFormat(null);
+                    final JsonFormat.Value format = JsonFormat.Value.merge(formatFromAnnotation, formatOverride);
+                    if (format.getShape() != JsonFormat.Shape.OBJECT) {
+                        propertyType = Utils.replaceRawClassInType(propertyType, Map.class);
+                    }
                 }
-                boolean isInAnnotationFilter = settings.includePropertyAnnotations.isEmpty();
-                if (!isInAnnotationFilter) {
-                    for (Class<? extends Annotation> optionalAnnotation : settings.includePropertyAnnotations) {
-                        if (beanPropertyWriter.getAnnotation(optionalAnnotation) != null) {
-                            isInAnnotationFilter = true;
-                            break;
-                        }
-                    }
-                    if (!isInAnnotationFilter) {
-                        System.out.println("Skipping " + sourceClass.type + "." + beanPropertyWriter.getName() + " because it is missing an annotation from includePropertyAnnotations!");
-                        continue;
-                    }
+
+                final Jackson2TypeContext jackson2TypeContext = new Jackson2TypeContext(this, beanPropertyWriter);
+
+                if (!isAnnotatedPropertyIncluded(beanPropertyWriter::getAnnotation, sourceClass.type.getName() + "." + beanPropertyWriter.getName())) {
+                    continue;
                 }
                 final boolean optional = settings.optionalProperties == OptionalProperties.useLibraryDefinition
                         ? !beanPropertyWriter.isRequired()
-                        : isAnnotatedPropertyOptional((AnnotatedElement) propertyMember);
+                        : isAnnotatedPropertyOptional(beanPropertyWriter::getAnnotation);
                 // @JsonUnwrapped
                 PropertyModel.PullProperties pullProperties = null;
-                final Member originalMember = beanPropertyWriter.getMember().getMember();
-                if (originalMember instanceof AccessibleObject) {
-                    final AccessibleObject accessibleObject = (AccessibleObject) originalMember;
-                    final JsonUnwrapped annotation = accessibleObject.getAnnotation(JsonUnwrapped.class);
-                    if (annotation != null && annotation.enabled()) {
-                        pullProperties = new PropertyModel.PullProperties(annotation.prefix(), annotation.suffix());
-                    }
+                final JsonUnwrapped annotation = beanPropertyWriter.getAnnotation(JsonUnwrapped.class);
+                if (annotation != null && annotation.enabled()) {
+                    pullProperties = new PropertyModel.PullProperties(annotation.prefix(), annotation.suffix());
                 }
-                properties.add(processTypeAndCreateProperty(beanPropertyWriter.getName(), propertyType, optional, sourceClass.type, originalMember, pullProperties));
+                properties.add(processTypeAndCreateProperty(beanPropertyWriter.getName(), propertyType, jackson2TypeContext, optional, sourceClass.type, propertyMember, pullProperties, propertyComments));
             }
         }
         if (sourceClass.type.isEnum()) {
-            return new BeanModel(sourceClass.type, null, null, null, null, null, properties, null);
+            return new BeanModel(sourceClass.type, null, null, null, null, null, properties, classComments);
         }
 
         final String discriminantProperty;
@@ -121,7 +240,7 @@ public class Jackson2Parser extends ModelParser {
         } else if (isSupported(parentJsonTypeInfo = getAnnotationRecursive(sourceClass.type, JsonTypeInfo.class))) {
             // this is child class
             discriminantProperty = getDiscriminantPropertyName(parentJsonTypeInfo);
-            discriminantLiteral = getTypeName(sourceClass.type);
+            discriminantLiteral = getTypeName(parentJsonTypeInfo, sourceClass.type);
         } else {
             // not part of explicit hierarchy
             discriminantProperty = null;
@@ -147,7 +266,62 @@ public class Jackson2Parser extends ModelParser {
         for (Type aInterface : interfaces) {
             addBeanToQueue(new SourceType<>(aInterface, sourceClass.type, "<interface>"));
         }
-        return new BeanModel(sourceClass.type, superclass, taggedUnionClasses, discriminantProperty, discriminantLiteral, interfaces, properties, null);
+        return new BeanModel(sourceClass.type, superclass, taggedUnionClasses, discriminantProperty, discriminantLiteral, interfaces, properties, classComments);
+    }
+
+    // @JsonIdentityInfo and @JsonIdentityReference
+    private Type processIdentity(Type propertyType, BeanPropertyWriter propertyWriter) {
+
+        final Class<?> clsT = Utils.getRawClassOrNull(propertyType);
+        final Class<?> clsW = propertyWriter.getType().getRawClass();
+        final Class<?> cls = clsT != null ? clsT : clsW;
+
+        if (cls != null) {
+            final JsonIdentityInfo identityInfoC = cls.getAnnotation(JsonIdentityInfo.class);
+            final JsonIdentityInfo identityInfoP = propertyWriter.getAnnotation(JsonIdentityInfo.class);
+            final JsonIdentityInfo identityInfo = identityInfoP != null ? identityInfoP : identityInfoC;
+            if (identityInfo == null) {
+                return null;
+            }
+            final JsonIdentityReference identityReferenceC = cls.getAnnotation(JsonIdentityReference.class);
+            final JsonIdentityReference identityReferenceP = propertyWriter.getAnnotation(JsonIdentityReference.class);
+            final JsonIdentityReference identityReference = identityReferenceP != null ? identityReferenceP : identityReferenceC;
+            final boolean alwaysAsId = identityReference != null && identityReference.alwaysAsId();
+
+            final Type idType;
+            if (identityInfo.generator() == ObjectIdGenerators.None.class) {
+                return null;
+            } else if (identityInfo.generator() == ObjectIdGenerators.PropertyGenerator.class) {
+                final BeanHelper beanHelper = getBeanHelper(cls);
+                if (beanHelper == null) {
+                    return null;
+                }
+                final BeanPropertyWriter[] properties = beanHelper.getProperties();
+                final Optional<BeanPropertyWriter> idProperty = Stream.of(properties)
+                        .filter(p -> p.getName().equals(identityInfo.property()))
+                        .findFirst();
+                if (idProperty.isPresent()) {
+                    final BeanPropertyWriter idPropertyWriter = idProperty.get();
+                    final Member idPropertyMember = idPropertyWriter.getMember().getMember();
+                    checkMember(idPropertyMember, idPropertyWriter.getName(), cls);
+                    idType = getGenericType(idPropertyMember);
+                } else {
+                    return null;
+                }
+            } else if (identityInfo.generator() == ObjectIdGenerators.IntSequenceGenerator.class) {
+                idType = Integer.class;
+            } else if (identityInfo.generator() == ObjectIdGenerators.UUIDGenerator.class) {
+                idType = String.class;
+            } else if (identityInfo.generator() == ObjectIdGenerators.StringIdGenerator.class) {
+                idType = String.class;
+            } else {
+                idType = Object.class;
+            }
+            return alwaysAsId
+                    ? idType
+                    : new UnionType(propertyType, idType);
+        }
+        return null;
     }
 
     private static Type getGenericType(Member member) {
@@ -172,7 +346,11 @@ public class Jackson2Parser extends ModelParser {
                 : jsonTypeInfo.property();
     }
 
-    private String getTypeName(final Class<?> cls) {
+    private String getTypeName(JsonTypeInfo parentJsonTypeInfo, final Class<?> cls) {
+        // Id.CLASS
+        if (parentJsonTypeInfo.use() == JsonTypeInfo.Id.CLASS) {
+            return cls.getName();
+        }
         // find @JsonTypeName recursively
         final JsonTypeName jsonTypeName = getAnnotationRecursive(cls, JsonTypeName.class);
         if (jsonTypeName != null && !jsonTypeName.value().isEmpty()) {
@@ -249,7 +427,7 @@ public class Jackson2Parser extends ModelParser {
             } else {
                 final String jsonSerializerName = jsonSerializer.getClass().getName();
                 if (settings.displaySerializerWarning) {
-                    System.out.println(String.format("Warning: Unknown serializer '%s' for class '%s'", jsonSerializerName, beanClass));
+                    TypeScriptGenerator.getLogger().verbose(String.format("Unknown serializer '%s' for class '%s'", jsonSerializerName, beanClass));
                 }
                 return null;
             }
@@ -271,10 +449,10 @@ public class Jackson2Parser extends ModelParser {
 
     }
 
-    private DeclarationModel parseEnumOrObjectEnum(SourceType<Class<?>> sourceClass) {
+    private DeclarationModel parseEnumOrObjectEnum(SourceType<Class<?>> sourceClass, List<String> classComments) {
         final JsonFormat jsonFormat = sourceClass.type.getAnnotation(JsonFormat.class);
         if (jsonFormat != null && jsonFormat.shape() == JsonFormat.Shape.OBJECT) {
-            return parseBean(sourceClass);
+            return parseBean(sourceClass, classComments);
         }
         final boolean isNumberBased = jsonFormat != null && (
                 jsonFormat.shape() == JsonFormat.Shape.NUMBER ||
@@ -284,70 +462,44 @@ public class Jackson2Parser extends ModelParser {
         final List<EnumMemberModel> enumMembers = new ArrayList<>();
         if (sourceClass.type.isEnum()) {
             final Class<?> enumClass = (Class<?>) sourceClass.type;
-
-            try {
-                Method valueMethod = null;
-                final BeanInfo beanInfo = Introspector.getBeanInfo(enumClass);
-                for (PropertyDescriptor propertyDescriptor : beanInfo.getPropertyDescriptors()) {
-                    final Method readMethod = propertyDescriptor.getReadMethod();
-                    if (readMethod.isAnnotationPresent(JsonValue.class)) {
-                        valueMethod = readMethod;
-                    }
+            final Field[] allEnumFields = enumClass.getDeclaredFields();
+            final List<Field> constants = Arrays.stream(allEnumFields).filter(Field::isEnumConstant).collect(Collectors.toList());
+            for (Field constant : constants) {
+                Object value;
+                try {
+                    constant.setAccessible(true);
+                    final String enumJson = objectMapper.writeValueAsString(constant.get(null));
+                    value = objectMapper.readValue(enumJson, new TypeReference<Object>(){});
+                } catch (Throwable e) {
+                    TypeScriptGenerator.getLogger().error(String.format("Cannot get enum value for constant '%s.%s'", enumClass.getName(), constant.getName()));
+                    TypeScriptGenerator.getLogger().verbose(Utils.exceptionToString(e));
+                    value = constant.getName();
                 }
 
-                int index = 0;
-                for (Field field : enumClass.getFields()) {
-                    if (field.isEnumConstant()) {
-                        if (isNumberBased) {
-                            final Number value = getNumberEnumValue(field, valueMethod, index++);
-                            enumMembers.add(new EnumMemberModel(field.getName(), value, null));
-                        } else {
-                            final String value = getStringEnumValue(field, valueMethod);
-                            enumMembers.add(new EnumMemberModel(field.getName(), value, null));
-                        }
-                    }
+                final List<String> constantComments = getComments(constant.getAnnotation(JsonPropertyDescription.class));
+                if (value instanceof String) {
+                    enumMembers.add(new EnumMemberModel(constant.getName(), (String) value, constantComments));
+                } else if (value instanceof Number) {
+                    enumMembers.add(new EnumMemberModel(constant.getName(), (Number) value, constantComments));
+                } else {
+                    TypeScriptGenerator.getLogger().warning(String.format("'%s' enum as a @JsonValue that isn't a String or Number, ignoring", enumClass.getName()));
                 }
-            } catch (Exception e) {
-                System.out.println(String.format("Cannot get enum values for '%s' enum", enumClass.getName()));
-                e.printStackTrace(System.out);
             }
         }
 
-        return new EnumModel(sourceClass.type, isNumberBased ? EnumKind.NumberBased : EnumKind.StringBased, enumMembers, null);
+        return new EnumModel(sourceClass.type, isNumberBased ? EnumKind.NumberBased : EnumKind.StringBased, enumMembers, classComments);
     }
 
-    private Number getNumberEnumValue(Field field, Method valueMethod, int index) throws Exception {
-        if (valueMethod != null) {
-            final Object valueObject = invokeJsonValueMethod(field, valueMethod);
-            if (valueObject instanceof Number) {
-                return (Number) valueObject;
-            }
-        }
-        return index;
+    private static List<String> getComments(JsonClassDescription classDescriptionAnnotation) {
+        final String propertyDescriptionValue = classDescriptionAnnotation != null ? classDescriptionAnnotation.value() : null;
+        final List<String> classComments = Utils.splitMultiline(propertyDescriptionValue, false);
+        return classComments;
     }
 
-    private String getStringEnumValue(Field field, Method valueMethod) throws Exception {
-        if (valueMethod != null) {
-            final Object valueObject = invokeJsonValueMethod(field, valueMethod);
-            if (valueObject instanceof String) {
-                return (String) valueObject;
-            }
-        }
-        if (field.isAnnotationPresent(JsonProperty.class)) {
-            final JsonProperty jsonProperty = field.getAnnotation(JsonProperty.class);
-            if (!jsonProperty.value().equals(JsonProperty.USE_DEFAULT_NAME)) {
-                return jsonProperty.value();
-            }
-        }
-        return field.getName();
-    }
-
-    private Object invokeJsonValueMethod(Field field, Method valueMethod) throws ReflectiveOperationException {
-        field.setAccessible(true);
-        final Object constant = field.get(null);
-        valueMethod.setAccessible(true);
-        final Object valueObject = valueMethod.invoke(constant);
-        return valueObject;
+    private static List<String> getComments(JsonPropertyDescription propertyDescriptionAnnotation) {
+        final String propertyDescriptionValue = propertyDescriptionAnnotation != null ? propertyDescriptionAnnotation.value() : null;
+        final List<String> propertyComments = Utils.splitMultiline(propertyDescriptionValue, false);
+        return propertyComments;
     }
 
 }

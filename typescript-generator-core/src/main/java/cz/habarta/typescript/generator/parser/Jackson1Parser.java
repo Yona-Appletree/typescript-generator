@@ -3,7 +3,6 @@ package cz.habarta.typescript.generator.parser;
 
 import cz.habarta.typescript.generator.*;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Member;
 import java.lang.reflect.Type;
 import java.util.*;
@@ -20,8 +19,26 @@ public class Jackson1Parser extends ModelParser {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public Jackson1Parser(Settings settings, TypeProcessor typeProcessor) {
-        super(settings, typeProcessor);
+    public static class Factory extends ModelParser.Factory {
+
+        @Override
+        public TypeProcessor getSpecificTypeProcessor() {
+            return createSpecificTypeProcessor();
+        }
+
+        @Override
+        public Jackson1Parser create(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers) {
+            return new Jackson1Parser(settings, commonTypeProcessor, restApplicationParsers);
+        }
+
+    }
+
+    public Jackson1Parser(Settings settings, TypeProcessor commonTypeProcessor) {
+        this(settings, commonTypeProcessor, Collections.emptyList());
+    }
+
+    public Jackson1Parser(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers) {
+        super(settings, commonTypeProcessor, restApplicationParsers);
         if (!settings.optionalAnnotations.isEmpty()) {
             final AnnotationIntrospector defaultAnnotationIntrospector = objectMapper.getSerializationConfig().getAnnotationIntrospector();
             final AnnotationIntrospector allAnnotationIntrospector = new NopAnnotationIntrospector() {
@@ -32,6 +49,10 @@ public class Jackson1Parser extends ModelParser {
             };
             this.objectMapper.setAnnotationIntrospector(new AnnotationIntrospector.Pair(defaultAnnotationIntrospector, allAnnotationIntrospector));
         }
+    }
+
+    private static TypeProcessor createSpecificTypeProcessor() {
+        return new ExcludingTypeProcessor(Arrays.asList(JsonNode.class.getName()));
     }
 
     @Override
@@ -48,36 +69,22 @@ public class Jackson1Parser extends ModelParser {
 
         final BeanHelper beanHelper = getBeanHelper(sourceClass.type);
         if (beanHelper != null) {
-            for (BeanPropertyWriter beanPropertyWriter : beanHelper.getProperties()) {
+            for (final BeanPropertyWriter beanPropertyWriter : beanHelper.getProperties()) {
                 final Member propertyMember = beanPropertyWriter.getMember().getMember();
                 checkMember(propertyMember, beanPropertyWriter.getName(), sourceClass.type);
                 Type propertyType = beanPropertyWriter.getGenericPropertyType();
-                if (propertyType == JsonNode.class) {
-                    propertyType = Object.class;
+                if (!isAnnotatedPropertyIncluded(beanPropertyWriter::getAnnotation, sourceClass.type.getName() + "." + beanPropertyWriter.getName())) {
+                    continue;
                 }
-                boolean isInAnnotationFilter = settings.includePropertyAnnotations.isEmpty();
-                if (!isInAnnotationFilter) {
-                    for (Class<? extends Annotation> optionalAnnotation : settings.includePropertyAnnotations) {
-                        if (beanPropertyWriter.getAnnotation(optionalAnnotation) != null) {
-                            isInAnnotationFilter = true;
-                            break;
-                        }
-                    }
-                    if (!isInAnnotationFilter) {
-                        System.out.println("Skipping " + sourceClass.type + "." + beanPropertyWriter.getName() + " because it is missing an annotation from includePropertyAnnotations!");
-                        continue;
-                    }
-                }
-                final boolean optional = isAnnotatedPropertyOptional((AnnotatedElement) propertyMember);
-                final Member originalMember = beanPropertyWriter.getMember().getMember();
-                properties.add(processTypeAndCreateProperty(beanPropertyWriter.getName(), propertyType, optional, sourceClass.type, originalMember, null));
+                final boolean optional = isAnnotatedPropertyOptional(beanPropertyWriter::getAnnotation);
+                properties.add(processTypeAndCreateProperty(beanPropertyWriter.getName(), propertyType, null, optional, sourceClass.type, propertyMember, null, null));
             }
         }
 
         final JsonTypeInfo jsonTypeInfo = sourceClass.type.getAnnotation(JsonTypeInfo.class);
         if (jsonTypeInfo != null && jsonTypeInfo.include() == JsonTypeInfo.As.PROPERTY) {
             if (!containsProperty(properties, jsonTypeInfo.property())) {
-                properties.add(new PropertyModel(jsonTypeInfo.property(), String.class, false, null, null, null));
+                properties.add(new PropertyModel(jsonTypeInfo.property(), String.class, false, null, null, null, null));
             }
         }
 

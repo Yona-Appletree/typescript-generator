@@ -1,6 +1,15 @@
-[![Maven Central](https://img.shields.io/maven-central/v/cz/habarta/typescript-generator/typescript-generator-core.svg)](https://repo1.maven.org/maven2/cz/habarta/typescript-generator/typescript-generator-core/)
+[![Maven Central](https://img.shields.io/maven-central/v/cz.habarta.typescript-generator/typescript-generator-core.svg)](https://repo1.maven.org/maven2/cz/habarta/typescript-generator/typescript-generator-core/)
 [![Appveyor](https://img.shields.io/appveyor/ci/vojtechhabarta/typescript-generator/master.svg)](https://ci.appveyor.com/project/vojtechhabarta/typescript-generator)
 [![Stars](https://img.shields.io/github/stars/vojtechhabarta/typescript-generator.svg?style=social)](https://github.com/vojtechhabarta/typescript-generator)
+
+Quick links:
+[Configuration parameters](http://www.habarta.cz/typescript-generator/maven/typescript-generator-maven-plugin/generate-mojo.html)
+|
+[Breaking changes](https://github.com/vojtechhabarta/typescript-generator/wiki/Breaking-Changes)
+|
+[Release notes](https://github.com/vojtechhabarta/typescript-generator/releases)
+|
+[Playground _(beta)_](https://jechlin.github.io/ts-gen-aws/)
 
 typescript-generator
 ====================
@@ -101,6 +110,9 @@ generateTypeScript {
 }
 ```
 
+You can run typescript-generator on demand using `gradle generateTypeScript` command
+or you can invoke it as part of another task by adding dependency from that task to `generateTypeScript` task in Gradle build file.
+
 More complete sample can be found [here](sample-gradle).
 Gradle plugin has the same features as Maven plugin, for detailed description see Maven generated [site](http://vojtechhabarta.github.io/typescript-generator/maven/typescript-generator-maven-plugin/generate-mojo.html). 
 
@@ -117,7 +129,7 @@ Input classes can be specified using several parameters:
 - **`classPatterns`** - list of glob patterns like `com.example.*Json`, includes all classes matched by the pattern, supported are `*` and `**` wildcards
 - **`classesFromJaxrsApplication`** - fully qualified name of JAX-RS application class, all classes used by application resources will be included, recommended if you have JAX-RS application class
 - **`classesFromAutomaticJaxrsApplication`** - value `true` will include classes from automatically discovered REST resources, recommended if you have JAX-RS application without `Application` subclass
-- **`excludeClasses`** - list of fully qualified class names, excluded classes will be mapped to TypeScript `any` type, if exluded class is a resource then this resource will not be scanned for used classes
+- **`excludeClasses`** - list of fully qualified class names, excluded classes will be mapped to TypeScript `any` type, if excluded class is a resource then this resource will not be scanned for used classes
 
 > Note: it is possible to use multiple parameters at the same time.
 
@@ -156,7 +168,7 @@ Architecture
 ```
            (Model)            (TsModel)
 ModelParser  ==>  ModelCompiler  ==>  Emitter
-         |         | 
+         |         |
          V         V
         TypeProcessor
 ```
@@ -181,12 +193,12 @@ Links
 Contributing
 ------------
 
-- this project targets Java 7
+- current major version supports Java 8 and later (version 1 supported Java 7 and 8)
 - keep pull requests small and focused ([10 tips for better Pull Requests](http://blog.ploeh.dk/2015/01/15/10-tips-for-better-pull-requests/))
 - do not add dependencies unless previously discussed in issue
 
 ### Code formatting
 
 - use 4 spaces for indentation in Java files
-- sort java imports alphabetically, you can use wildcards
+- sort java imports alphabetically (including static imports), you can use wildcards
 - please do not reformat whole files in IDE

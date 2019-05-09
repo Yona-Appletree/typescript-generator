@@ -17,11 +17,9 @@ public class DefaultTypeProcessorTest {
         assertEquals(TsType.Void, converter.processType(void.class, context).getTsType());
         assertEquals(TsType.Number, converter.processType(BigDecimal.class, context).getTsType());
         assertEquals(TsType.String, converter.processType(UUID.class, context).getTsType());
-
-        // uncomment on Java 8
-//        assertEquals(TsType.Number, converter.processType(OptionalInt.class, context).getTsType());
-//        assertEquals(TsType.Number, converter.processType(OptionalLong.class, context).getTsType());
-//        assertEquals(TsType.Number, converter.processType(OptionalDouble.class, context).getTsType());
+        assertEquals(TsType.Number.optional(), converter.processType(OptionalInt.class, context).getTsType());
+        assertEquals(TsType.Number.optional(), converter.processType(OptionalLong.class, context).getTsType());
+        assertEquals(TsType.Number.optional(), converter.processType(OptionalDouble.class, context).getTsType());
     }
 
     @Test
@@ -48,7 +46,7 @@ public class DefaultTypeProcessorTest {
     }
 
     public static TypeProcessor.Context getTestContext(final TypeProcessor typeProcessor) {
-        return new TypeProcessor.Context(new SymbolTable(TestUtils.settings()), typeProcessor);
+        return new TypeProcessor.Context(new SymbolTable(TestUtils.settings()), typeProcessor, null);
     }
 
 }

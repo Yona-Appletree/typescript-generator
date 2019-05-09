@@ -1,11 +1,13 @@
 
 package cz.habarta.typescript.generator;
 
-import cz.habarta.typescript.generator.parser.JaxrsApplicationParser;
-import cz.habarta.typescript.generator.util.Utils;
+import cz.habarta.typescript.generator.util.UnionType;
 import java.lang.reflect.*;
 import java.math.*;
+import java.time.temporal.Temporal;
 import java.util.*;
+import java.util.stream.Collectors;
+import javax.xml.bind.JAXBElement;
 
 
 public class DefaultTypeProcessor implements TypeProcessor {
@@ -15,15 +17,8 @@ public class DefaultTypeProcessor implements TypeProcessor {
         if (KnownTypes.containsKey(javaType)) return new Result(KnownTypes.get(javaType));
         if (javaType instanceof Class) {
             final Class<?> javaClass = (Class<?>) javaType;
-            if (JavaTimeTemporal != null && JavaTimeTemporal.isAssignableFrom(javaClass)) {
+            if (Temporal.class.isAssignableFrom(javaClass)) {
                 return new Result(TsType.Date);
-            }
-        }
-        // map JAX-RS standard types to `any`
-        for (Class<?> cls : JaxrsApplicationParser.getStandardEntityClasses()) {
-            final Class<?> rawClass = Utils.getRawClassOrNull(javaType);
-            if (rawClass != null && cls.isAssignableFrom(rawClass)) {
-                return new Result(TsType.Any);
             }
         }
         if (javaType instanceof Class) {
@@ -41,10 +36,13 @@ public class DefaultTypeProcessor implements TypeProcessor {
             if (Map.class.isAssignableFrom(javaClass)) {
                 return new Result(new TsType.IndexedArrayType(TsType.String, TsType.Any));
             }
-            if (javaClass.getName().equals("java.util.OptionalInt") ||
-                    javaClass.getName().equals("java.util.OptionalLong") ||
-                    javaClass.getName().equals("java.util.OptionalDouble")) {
+            if (OptionalInt.class.isAssignableFrom(javaClass) ||
+                    OptionalLong.class.isAssignableFrom(javaClass) ||
+                    OptionalDouble.class.isAssignableFrom(javaClass)) {
                 return new Result(TsType.Number.optional());
+            }
+            if (JAXBElement.class.isAssignableFrom(javaClass)) {
+                return new Result(TsType.Any);
             }
             // generic structural type used without type arguments
             if (javaClass.getTypeParameters().length > 0) {
@@ -69,9 +67,13 @@ public class DefaultTypeProcessor implements TypeProcessor {
                     final Result result = context.processType(parameterizedType.getActualTypeArguments()[1]);
                     return new Result(new TsType.IndexedArrayType(TsType.String, result.getTsType()), result.getDiscoveredClasses());
                 }
-                if (javaClass.getName().equals("java.util.Optional")) {
+                if (Optional.class.isAssignableFrom(javaClass)) {
                     final Result result = context.processType(parameterizedType.getActualTypeArguments()[0]);
                     return new Result(result.getTsType().optional(), result.getDiscoveredClasses());
+                }
+                if (JAXBElement.class.isAssignableFrom(javaClass)) {
+                    final Result result = context.processType(parameterizedType.getActualTypeArguments()[0]);
+                    return new Result(result.getTsType(), result.getDiscoveredClasses());
                 }
                 // generic structural type
                 final List<Class<?>> discoveredClasses = new ArrayList<>();
@@ -92,6 +94,10 @@ public class DefaultTypeProcessor implements TypeProcessor {
         }
         if (javaType instanceof TypeVariable) {
             final TypeVariable<?> typeVariable = (TypeVariable<?>) javaType;
+            if (typeVariable.getGenericDeclaration() instanceof Method) {
+                // example method: public <T extends Number> T getData();
+                return context.processType(typeVariable.getBounds()[0]);
+            }
             return new Result(new TsType.GenericVariableType(typeVariable.getName()));
         }
         if (javaType instanceof WildcardType) {
@@ -100,6 +106,20 @@ public class DefaultTypeProcessor implements TypeProcessor {
             return upperBounds.length > 0
                     ? context.processType(upperBounds[0])
                     : new Result(TsType.Any);
+        }
+        if (javaType instanceof UnionType) {
+            final UnionType unionType = (UnionType) javaType;
+            final List<Result> results = unionType.types.stream()
+                    .map(type -> context.processType(type))
+                    .collect(Collectors.toList());
+            return new Result(
+                    new TsType.UnionType(results.stream()
+                            .map(result -> result.getTsType())
+                            .collect(Collectors.toList())),
+                    results.stream()
+                            .flatMap(result -> result.getDiscoveredClasses().stream())
+                            .collect(Collectors.toList())
+            );
         }
         return null;
     }
@@ -127,6 +147,7 @@ public class DefaultTypeProcessor implements TypeProcessor {
         knownTypes.put(String.class, TsType.String);
         knownTypes.put(void.class, TsType.Void);
         knownTypes.put(Void.class, TsType.Void);
+        knownTypes.put(Number.class, TsType.Number);
         // other java packages
         knownTypes.put(BigDecimal.class, TsType.Number);
         knownTypes.put(BigInteger.class, TsType.Number);
@@ -136,15 +157,5 @@ public class DefaultTypeProcessor implements TypeProcessor {
     }
 
     private static final Map<Type, TsType> KnownTypes = getKnownTypes();
-
-    private static Class<?> getTemporalIfAvailable() {
-        try {
-            return Class.forName("java.time.temporal.Temporal");
-        } catch (ClassNotFoundException e) {
-            return null;
-        }
-    }
-
-    private static final Class<?> JavaTimeTemporal = getTemporalIfAvailable();
 
 }

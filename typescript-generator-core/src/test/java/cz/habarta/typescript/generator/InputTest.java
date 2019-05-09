@@ -1,8 +1,10 @@
 
 package cz.habarta.typescript.generator;
 
-import io.github.lukehutch.fastclasspathscanner.FastClasspathScanner;
-import io.github.lukehutch.fastclasspathscanner.scanner.ScanResult;
+import io.github.classgraph.ClassGraph;
+import io.github.classgraph.ScanResult;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.*;
 import org.junit.Assert;
 import org.junit.Test;
@@ -12,8 +14,8 @@ public class InputTest {
 
     @Test
     public void testScanner() {
-        final ScanResult scanResult = new FastClasspathScanner().scan();
-        final List<String> allClassNames = scanResult.getNamesOfAllClasses();
+        final ScanResult scanResult = new ClassGraph().enableAllInfo().scan();
+        final List<String> allClassNames = scanResult.getAllClasses().getNames();
         final List<String> testClassNames = Input.filterClassNames(allClassNames, Arrays.asList("cz.habarta.typescript.generator.**Test"));
         Assert.assertTrue("Typescript-generator must have at least 20 tests :-)", testClassNames.size() > 20);
     }
@@ -64,9 +66,45 @@ public class InputTest {
     }
 
     @Test
-    public void testGlobToRegexp() {
-        Assert.assertEquals("\\Q\\E.*\\QJson\\E", Input.globToRegexp("**Json").toString());
-        Assert.assertEquals("\\Qcz.habarta.test.\\E[^.\\$]*\\Q\\E", Input.globToRegexp("cz.habarta.test.*").toString());
+    public void testClassesWithAnnotations() {
+        final String output = new TypeScriptGenerator(TestUtils.settings()).generateTypeScript(Input.fromClassNamesAndJaxrsApplication(
+                null, null, Arrays.asList(MyJsonClass.class.getName()), null, null, null, false, null, null, false));
+        Assert.assertTrue(output.contains("name: string;"));
+    }
+
+    @Test
+    public void testClassesImplementingInterfaces() {
+        final String output = new TypeScriptGenerator(TestUtils.settings()).generateTypeScript(Input.fromClassNamesAndJaxrsApplication(
+                null, null, null, Arrays.asList(MyJsonInterface.class.getName()), null, null, false, null, null, false));
+        Assert.assertTrue(output.contains("firstName: string;"));
+        Assert.assertTrue(output.contains("lastName: string;"));
+    }
+
+    @Test
+    public void testClassesExtendingClasses() {
+        final String output = new TypeScriptGenerator(TestUtils.settings()).generateTypeScript(Input.fromClassNamesAndJaxrsApplication(
+                null, null, null, null, Arrays.asList(MyJsonInterfaceImpl.class.getName()), null, false, null, null, false));
+        Assert.assertTrue(output.contains("lastName: string;"));
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    private static @interface MyJsonClass {
+    }
+
+    private interface MyJsonInterface {
+    }
+
+    private static class MyJsonInterfaceImpl implements MyJsonInterface {
+        public String firstName;
+    }
+
+    private static class MyJsonInterfaceSubclass extends MyJsonInterfaceImpl {
+        public String lastName;
+    }
+
+    @MyJsonClass
+    private static class MyData {
+        public String name;
     }
 
 }
